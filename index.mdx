@@ -1,0 +1,63 @@
+---
+title: "Svantic: The Enterprise AI Agent Platform"
+description: "Build, deploy, and orchestrate AI agents with A2A-compliant routing, real-time observability, and built-in integrations. Get started in minutes."
+---
+
+Svantic is an enterprise AI agent platform that lets you build intelligent agents, connect them to your tools and workflows, and orchestrate them in real time. Agents communicate using the A2A (agent-to-agent) protocol, coordinate through the Svantic Mesh, and are fully observable through distributed tracing and a live dashboard.
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Build and connect your first agent in under 10 minutes.
+  </Card>
+  <Card title="Authentication" icon="key" href="/authentication">
+    Get your API credentials and authenticate with the platform.
+  </Card>
+  <Card title="Build an Agent" icon="robot" href="/guides/build-agent">
+    Create an A2A-compliant agent using the @svantic/sdk.
+  </Card>
+  <Card title="SDK Reference" icon="code" href="/sdk/overview">
+    Full API reference for @svantic/sdk and @svantic/telemetry.
+  </Card>
+</CardGroup>
+
+## How Svantic works
+
+Svantic has three layers you interact with as a customer:
+
+- **Agents** — Lightweight Node.js services built with `@svantic/sdk`. Each agent exposes capabilities (tools) that the platform can invoke.
+- **Mesh** — The agent runtime that routes requests, manages sessions, and orchestrates multi-agent workflows. Your agents connect to the Mesh using `MeshConnector`.
+- **Dashboard** — The web UI for monitoring sessions, traces, usage, and configuring your organization.
+
+<Steps>
+  <Step title="Install the SDK">
+    ```bash
+    npm install @svantic/sdk
+    ```
+  </Step>
+  <Step title="Create an agent">
+    Define your agent, its capabilities, and expose it over HTTP.
+  </Step>
+  <Step title="Connect to the Mesh">
+    Use `MeshConnector` to register your agent with your Svantic organization.
+  </Step>
+  <Step title="Start a session and ask">
+    Open a session and send natural-language requests — Svantic routes them to the right agents automatically.
+  </Step>
+</Steps>
+
+## Explore the docs
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book-open" href="/concepts/agents">
+    Understand agents, sessions, tenants, and telemetry.
+  </Card>
+  <Card title="Webhooks" icon="webhook" href="/integrations/webhooks">
+    Trigger agent sessions from GitHub, Jira, Slack, and more.
+  </Card>
+  <Card title="Built-in Tools" icon="screwdriver-wrench" href="/integrations/builtin-tools">
+    Pre-built integrations: GitHub, Jira, Slack, Zendesk, Datadog.
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/cli/overview">
+    Manage agents, sessions, and tenants from the command line.
+  </Card>
+</CardGroup>

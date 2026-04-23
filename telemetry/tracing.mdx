@@ -1,0 +1,267 @@
+---
+title: "Create and Export Spans with SvanticTracer"
+description: "Use SvanticTracer to create generic, LLM, and tool spans, adopt remote trace context, and apply auto-instrumentation wrappers to common call patterns."
+---
+
+`SvanticTracer` is the primary API for creating spans. You obtain it from a configured `SvanticTelemetry` instance via `get_tracer()`. The tracer maintains an internal span stack so nested spans resolve their parent automatically — you never need to pass parent context explicitly. When the last root span ends, the trace ID is cleared and the next top-level span starts a fresh trace.
+
+## Getting a tracer
+
+```typescript
+import { SvanticTelemetry } from '@svantic/telemetry';
+
+const telemetry = SvanticTelemetry.init({
+    service_name: 'my-agent',
+    export: {
+        endpoint: 'http://localhost:7001/telemetry/otlp',
+        auth: { type: 'api_key', key: 'your-tenant-secret' },
+    },
+});
+
+const tracer = telemetry.get_tracer();
+```
+
+## Span methods
+
+### `start_span(name, attributes?)`
+
+Creates a generic span. If no trace is active, a new 32-character hex trace ID is generated. Any subsequent call to `start_span` while this span is open creates a child span automatically.
+
+```typescript
+const span = tracer.start_span('handle-request', {
+    'my.attribute': 'value',
+});
+// ... your logic ...
+span.end();
+```
+
+<ParamField body="name" type="string" required>
+  Span name. Use a short, descriptive operation name (e.g. `"db-query"`, `"parse-document"`).
+</ParamField>
+
+<ParamField body="attributes" type="Record<string, string | number | boolean>">
+  Optional key-value attributes attached to the span at creation time. Values must be strings, numbers, or booleans.
+</ParamField>
+
+### `start_llm_span(model, attributes?)`
+
+Creates a specialised LLM span that sets `svantic.llm.model` automatically. The returned `SvanticLlmSpan` extends the standard span with a token-aware `end()` method.
+
+```typescript
+const llm_span = tracer.start_llm_span('gpt-4o');
+// ... call the model ...
+llm_span.end({ input_tokens: 120, output_tokens: 340 });
+```
+
+When you pass token counts to `end()`, the span stores `svantic.llm.input_tokens`, `svantic.llm.output_tokens`, and `svantic.llm.total_tokens` as attributes, and emits a `UsageRecord` to the telemetry buffer for per-model cost tracking.
+
+<ParamField body="model" type="string" required>
+  LLM model identifier (e.g. `"gpt-4o"`, `"claude-3-5-sonnet"`). Stored as the `svantic.llm.model` attribute.
+</ParamField>
+
+<ParamField body="input_tokens" type="number">
+  Prompt/input tokens consumed. Passed to `llm_span.end({ input_tokens })`.
+</ParamField>
+
+<ParamField body="output_tokens" type="number">
+  Completion/output tokens generated. Passed to `llm_span.end({ output_tokens })`.
+</ParamField>
+
+<ParamField body="model (end override)" type="string">
+  Override the model name at end time if it differed from what was known at span creation.
+</ParamField>
+
+### `start_tool_span(tool_name, attributes?)`
+
+Creates a span named `tool:<tool_name>` with `svantic.tool.name` set automatically. Use it to trace discrete tool invocations.
+
+```typescript
+const tool_span = tracer.start_tool_span('search_products', {
+    'svantic.tool.args': JSON.stringify({ query: 'shoes' }),
+});
+// ... execute tool ...
+tool_span.end();
+```
+
+<ParamField body="tool_name" type="string" required>
+  The tool's name. Stored as the `svantic.tool.name` attribute and embedded in the span name as `tool:<tool_name>`.
+</ParamField>
+
+### `adopt_remote_context(trace_id, span_id)`
+
+Adopts an incoming W3C trace context so that all subsequent local spans are parented under the remote caller. Typically called immediately after extracting a `traceparent` header from an inbound request.
+
+```typescript
+import { ContextExtractor } from '@svantic/telemetry/propagation';
+
+const extracted = ContextExtractor.extract(inbound_headers);
+if (extracted) {
+    tracer.adopt_remote_context(extracted.trace_id, extracted.span_id);
+}
+```
+
+The adopted trace ID and remote parent span ID are cleared automatically when the last local span ends. See [Propagation](/telemetry/propagation) for the full header extraction workflow.
+
+<ParamField body="trace_id" type="string" required>
+  32-character lowercase hex trace ID from the remote caller's `traceparent` header.
+</ParamField>
+
+<ParamField body="span_id" type="string" required>
+  16-character lowercase hex span ID (the remote's parent-id field) from `traceparent`.
+</ParamField>
+
+### `get_current_context()`
+
+Returns `{ trace_id, span_id }` for the currently active span, or `null` when no span is open. Use this to inject propagation headers into outbound requests mid-trace.
+
+```typescript
+const ctx = tracer.get_current_context();
+if (ctx) {
+    ContextInjector.inject(outbound_headers, {
+        trace_id: ctx.trace_id,
+        span_id: ctx.span_id,
+    });
+}
+```
+
+## Span nesting
+
+Spans nest automatically via an internal stack. Starting a span while another is active makes it a child of the currently open span.
+
+```typescript
+const parent = tracer.start_span('request');
+const child = tracer.start_span('db-query'); // parented under "request"
+child.end();
+parent.end();
+// When parent.end() is called, the trace ID is cleared
+```
+
+<Note>
+  Overlapping (out-of-order) span ends are handled gracefully — the span is removed from wherever it sits in the stack, not just the top.
+</Note>
+
+## Span attributes
+
+All three span types support `set_attribute()` for adding attributes after creation.
+
+```typescript
+const span = tracer.start_span('process-document');
+span.set_attribute('document.id', 'doc-42');
+span.set_attribute('document.pages', 14);
+// ...
+span.end();
+```
+
+Standard Svantic attribute keys are defined in `SVANTIC_ATTRIBUTES` from `@svantic/telemetry`:
+
+| Key | Meaning |
+|-----|---------|
+| `svantic.llm.model` | LLM model identifier |
+| `svantic.llm.input_tokens` | Input/prompt tokens |
+| `svantic.llm.output_tokens` | Output/completion tokens |
+| `svantic.llm.total_tokens` | Sum of input and output tokens |
+| `svantic.tool.name` | Tool name |
+| `svantic.tool.args` | Serialised tool arguments (JSON string) |
+| `svantic.tool.result` | Serialised tool result (JSON string, truncated to 1000 chars) |
+| `svantic.a2a.capability` | A2A capability name |
+| `svantic.a2a.remote_url` | Remote agent URL |
+| `svantic.session.id` | Session identifier |
+| `svantic.tenant.id` | Tenant identifier |
+
+## Auto-instrumentations
+
+The `@svantic/telemetry/instrumentations` subpath exports three convenience wrappers. Each takes a tracer and wraps an async function so spans are started and ended automatically — including on error.
+
+<Tabs>
+
+<Tab title="LlmInstrumentation">
+
+Wraps an LLM API call. Creates an LLM span, records token usage when you end the span, and re-throws any error after marking the span as failed.
+
+```typescript
+import { LlmInstrumentation } from '@svantic/telemetry/instrumentations';
+
+const llm = new LlmInstrumentation(tracer);
+
+const response = await llm.wrap_call('gpt-4o', async () => {
+    return await openai.chat.completions.create({ /* ... */ });
+});
+```
+
+The span is always ended in a `finally` block. If you end the inner `SvanticLlmSpan` manually before `wrap_call` returns, the `finally` block's `end()` call is a silent no-op (idempotent).
+
+</Tab>
+
+<Tab title="A2aInstrumentation">
+
+Provides two helpers for agent-to-agent tracing:
+
+- `extract_context(headers)` — extracts a remote `traceparent` and adopts it on the tracer.
+- `wrap_capability(capability_name, call_fn)` — wraps an A2A capability handler with a span named `a2a:<capability_name>`, setting `svantic.a2a.capability` automatically.
+
+```typescript
+import { A2aInstrumentation } from '@svantic/telemetry/instrumentations';
+
+const a2a = new A2aInstrumentation(tracer);
+
+// In your HTTP handler for inbound A2A requests:
+a2a.extract_context(request.headers);
+
+const result = await a2a.wrap_capability('summarize', async () => {
+    return await run_summarize_capability(request.body);
+});
+```
+
+</Tab>
+
+<Tab title="ToolInstrumentation">
+
+Wraps a tool call. Serialises `args` as JSON and attaches it as `svantic.tool.args`. On success, attaches the serialised result as `svantic.tool.result`. Both are truncated to 1000 characters to avoid oversized payloads.
+
+```typescript
+import { ToolInstrumentation } from '@svantic/telemetry/instrumentations';
+
+const tools = new ToolInstrumentation(tracer);
+
+const result = await tools.wrap_call(
+    'search_products',
+    { query: 'shoes', limit: 10 },
+    async () => {
+        return await product_db.search({ query: 'shoes', limit: 10 });
+    },
+);
+```
+
+</Tab>
+
+</Tabs>
+
+## Standalone events
+
+Use `telemetry.event()` to emit discrete signals that aren't part of the span tree. Events are correlated to the active trace and span when one is open.
+
+```typescript
+telemetry.event('capability.invoked', {
+    capability: 'summarize',
+    tenant_id: 'acme',
+});
+```
+
+Events are buffered and flushed alongside spans. Exporters that support `export_events` (such as `MeshSpanExporter`) will forward them.
+
+## Span data shape
+
+When a span ends, the tracer delivers a `SpanData` object to the exporter. The shape is:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `trace_id` | `string` | 32-char hex trace ID |
+| `span_id` | `string` | 16-char hex span ID |
+| `parent_span_id` | `string \| undefined` | Parent span ID, or undefined for root spans |
+| `name` | `string` | Span name |
+| `start_time` | `number` | Epoch ms when the span started |
+| `end_time` | `number` | Epoch ms when the span ended |
+| `duration_ms` | `number` | `end_time - start_time` |
+| `status` | `'ok' \| 'error'` | Status set by `span.set_error()` or default `'ok'` |
+| `error_message` | `string \| undefined` | Error message if status is `'error'` |
+| `attributes` | `Record<string, unknown>` | All attributes set on the span |

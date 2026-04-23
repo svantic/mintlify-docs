@@ -1,0 +1,232 @@
+---
+title: "Connect Your Agent to the Svantic Mesh"
+description: "Use MeshConnector to register your agent with the Svantic gateway, exchange credentials for a mesh JWT, and keep the registration alive with automatic heartbeats."
+---
+
+Once your agent is running and its A2A endpoints are exposed, you connect it to the Svantic platform using `MeshConnector`. The connector registers your agent with the Svantic Gateway, exchanges your credentials for a signed mesh JWT, and sends periodic heartbeats to keep the registration active. From that point, the Mesh can route requests to your agent and include it in orchestrated sessions.
+
+## Prerequisites
+
+- A running Svantic agent with `agent.expose(app)` already called and `app.listen()` started
+- Your Svantic `client_id` and `client_secret` — find these in the dashboard under **Settings → API Keys**
+- The URLs for your Svantic Gateway and Mesh (provided in the dashboard or by your Svantic administrator)
+
+## Import MeshConnector
+
+`MeshConnector` is in the `@svantic/sdk/mesh` subpath export.
+
+```typescript
+import { MeshConnector } from '@svantic/sdk/mesh';
+```
+
+## MeshConnectorConfig fields
+
+<ParamField path="gateway_url" type="string" required>
+  URL of the Svantic Gateway (for example `https://gateway.svantic.com`). The connector registers your agent here and sends heartbeats to this URL.
+</ParamField>
+
+<ParamField path="mesh_url" type="string" required>
+  URL of the Svantic Mesh runtime (for example `https://mesh.svantic.com`). Used for token exchange — the mesh issues the JWT used for session operations.
+</ParamField>
+
+<ParamField path="client_id" type="string" required>
+  Your tenant identifier. Shown in the dashboard under **Settings → API Keys**.
+</ParamField>
+
+<ParamField path="client_secret" type="string" required>
+  Your tenant secret. Treat this like a password — do not commit it to source control. Use an environment variable.
+</ParamField>
+
+<ParamField path="retries" type="number" default="3">
+  Number of retry attempts if the gateway registration request fails.
+</ParamField>
+
+<ParamField path="retry_delay_ms" type="number" default="2000">
+  Milliseconds to wait between registration retry attempts.
+</ParamField>
+
+## Connect your agent
+
+<Steps>
+  <Step title="Expose the agent first">
+    The agent must be listening on a port before you connect to the Mesh. The Gateway stores your agent's `url` and uses it to route requests — if the agent is not reachable yet, registration may succeed but invocations will fail.
+
+    ```typescript
+    agent.expose(app);
+    const server = app.listen(4000);
+    ```
+  </Step>
+
+  <Step title="Create a MeshConnector">
+    Pass your agent instance and connection configuration.
+
+    ```typescript
+    const mesh = new MeshConnector(agent, {
+      gateway_url: process.env.SVANTIC_GATEWAY_URL!,
+      mesh_url: process.env.SVANTIC_MESH_URL!,
+      client_id: process.env.SVANTIC_CLIENT_ID!,
+      client_secret: process.env.SVANTIC_CLIENT_SECRET!,
+    });
+    ```
+  </Step>
+
+  <Step title="Call connect()">
+    `connect()` registers with the Gateway, exchanges credentials for a mesh JWT, and starts the heartbeat timer. It is async — await it before accepting traffic.
+
+    ```typescript
+    await mesh.connect();
+    console.log('Agent registered with Svantic Mesh');
+    ```
+  </Step>
+
+  <Step title="Disconnect on shutdown">
+    Call `disconnect()` to deregister from the Gateway cleanly. This is best-effort — it does not throw if the Gateway is unreachable.
+
+    ```typescript
+    process.on('SIGTERM', async () => {
+      await mesh.disconnect();
+      await agent.close();
+      server.close();
+    });
+    ```
+  </Step>
+</Steps>
+
+## What connect() does
+
+When you call `mesh.connect()`, three things happen in order:
+
+1. **Register with the Gateway** — sends your agent's `agent_type`, `instance_id`, `url`, and capability list to `POST /agents/register`. The Gateway persists this to its database and returns a JWT. If registration fails, it retries up to `retries` times with `retry_delay_ms` between attempts.
+
+2. **Exchange credentials for a mesh JWT** — calls `POST /auth/get_token` on the Mesh URL with your `client_id`, `client_secret`, and `agent_type`. Returns a signed JWT used for session operations.
+
+3. **Start the heartbeat** — sets a timer that calls `POST /agents/heartbeat` on the Gateway every 5 minutes. This keeps your registration active. The timer is unreffed, so it does not prevent the process from exiting on its own.
+
+## Complete end-to-end example
+
+This is the full pattern for a production agent: create, expose, connect, and handle shutdown.
+
+```typescript agent.ts
+import express from 'express';
+import { Agent } from '@svantic/sdk';
+import { MeshConnector } from '@svantic/sdk/mesh';
+
+const app = express();
+
+// 1. Create the agent
+const agent = new Agent({
+  name: 'inventory',
+  description: 'Check and update product stock levels',
+  url: process.env.AGENT_URL ?? 'http://localhost:4000',
+  version: '1.0.0',
+  agent_type: 'inventory',
+});
+
+// 2. Define capabilities
+agent.define_capability({
+  name: 'check_stock',
+  description: 'Return the current stock level for a product SKU',
+  parameters: {
+    type: 'object',
+    properties: {
+      product_id: {
+        type: 'string',
+        description: 'Product SKU',
+      },
+    },
+    required: ['product_id'],
+  },
+  handler: async (args) => {
+    return { product_id: args.product_id, available: 42 };
+  },
+});
+
+// 3. Expose A2A endpoints
+agent.expose(app);
+
+// 4. Start the server
+const server = app.listen(4000, async () => {
+  console.log('Inventory agent listening on http://localhost:4000');
+
+  // 5. Connect to the Mesh AFTER the server is listening
+  const mesh = new MeshConnector(agent, {
+    gateway_url: process.env.SVANTIC_GATEWAY_URL!,
+    mesh_url: process.env.SVANTIC_MESH_URL!,
+    client_id: process.env.SVANTIC_CLIENT_ID!,
+    client_secret: process.env.SVANTIC_CLIENT_SECRET!,
+    retries: 5,
+    retry_delay_ms: 3000,
+  });
+
+  await mesh.connect();
+  console.log('Connected to Svantic Mesh');
+
+  // 6. Handle shutdown
+  const shutdown = async () => {
+    console.log('Shutting down...');
+    await mesh.disconnect();
+    await agent.close();
+    server.close(() => process.exit(0));
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+});
+```
+
+## Environment variables
+
+Store credentials in environment variables — never in source code.
+
+```bash .env
+SVANTIC_GATEWAY_URL=https://gateway.svantic.com
+SVANTIC_MESH_URL=https://mesh.svantic.com
+SVANTIC_CLIENT_ID=your-tenant-id
+SVANTIC_CLIENT_SECRET=your-tenant-secret
+AGENT_URL=https://inventory.your-domain.com
+```
+
+<Warning>
+  Do not commit your `client_secret` to version control. Use a secrets manager or environment variable injection in your deployment pipeline.
+</Warning>
+
+## Retry behavior
+
+If the Gateway registration request fails (network error, non-2xx response), the connector retries automatically. With the defaults (`retries: 3`, `retry_delay_ms: 2000`), it makes up to 4 total attempts with 2-second delays between each. If all attempts fail, `connect()` throws an error with details of the last failure.
+
+```typescript
+try {
+  await mesh.connect();
+} catch (err) {
+  console.error('Failed to connect to Svantic Mesh:', err.message);
+  process.exit(1);
+}
+```
+
+## Heartbeat
+
+After a successful `connect()`, the connector automatically sends a heartbeat to the Gateway every 5 minutes. The heartbeat reports the agent's status as `available` and prevents the registration from expiring. You do not need to manage this manually.
+
+The heartbeat uses the JWT received during registration. If the heartbeat fails (for example, a transient network error), the failure is silently ignored — the next heartbeat will retry.
+
+## Check connection status
+
+Use the `connected` property to check whether the connector has an active registration.
+
+```typescript
+console.log(mesh.connected); // true after connect(), false after disconnect()
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Build an agent" icon="robot" href="/guides/build-agent">
+    Start from scratch — install the SDK and create your first agent.
+  </Card>
+  <Card title="Define capabilities" icon="function" href="/guides/capabilities">
+    Add more capabilities and typed handlers to your agent.
+  </Card>
+  <Card title="API keys" icon="key" href="/platform/api-keys">
+    Find your client_id and client_secret in the Svantic dashboard.
+  </Card>
+</CardGroup>

@@ -1,0 +1,408 @@
+---
+title: "Agent Class Reference — @svantic/sdk"
+description: "Complete reference for the Agent class: constructor options, define_capability, register_mcp, expose, set_context, and all property accessors."
+---
+
+`Agent` turns any Express application into an A2A-compliant agent. It manages capability registration, builds the agent card with extended parameter schemas for structured invocation, and mounts the JSON-RPC and discovery endpoints on Express. `Agent` has no dependency on Svantic Mesh — it is a pure A2A implementation. To connect to the mesh, wrap it with [`MeshConnector`](/sdk/mesh-connector).
+
+## Constructor
+
+```typescript
+import { Agent } from '@svantic/sdk';
+
+const agent = new Agent(config: AgentConfig);
+```
+
+### AgentConfig
+
+<ParamField body="name" type="string" required>
+  Display name for this agent. Appears in the agent card and is used as the default `agent_type` if none is provided.
+</ParamField>
+
+<ParamField body="description" type="string" required>
+  Human-readable description of what this agent does. Shown to remote agents and the LLM orchestrator.
+</ParamField>
+
+<ParamField body="url" type="string" required>
+  Base URL where this agent is reachable, for example `http://localhost:4000`. Trailing slashes are stripped automatically. Used to construct the A2A endpoint URL in the agent card.
+</ParamField>
+
+<ParamField body="version" type="string" default="1.0.0">
+  Version string embedded in the agent card. Defaults to `"1.0.0"`.
+</ParamField>
+
+<ParamField body="agent_type" type="string">
+  Logical agent type used by the mesh for routing. All pods of the same service should share this value. Defaults to `name` when not provided.
+</ParamField>
+
+<ParamField body="instance_id" type="string">
+  Unique identifier for this running instance. Must be unique across all instances of the same `agent_type`.
+
+  Resolved in this order:
+  1. The value you pass here.
+  2. The `SAVANT_INSTANCE_ID` environment variable — set this in containers or Kubernetes pods.
+  3. `{os.hostname()}-{port}` derived from `url`.
+  4. `instance-{Date.now()}` as a last-resort fallback.
+</ParamField>
+
+<ParamField body="context" type="Record<string, unknown>">
+  Arbitrary key-value metadata about this instance. Used by the mesh router for context-based routing (for example, `{ datasource_id: 'adp', page_url: '...' }`). Exposed via the `context` getter and updated with `set_context()`.
+</ParamField>
+
+<ParamField body="telemetry" type="SvanticTelemetry">
+  Pre-configured `SvanticTelemetry` instance from `@svantic/telemetry`. When provided, the agent captures spans for every capability invocation and exposes them via `agent.telemetry` and `agent.tracer`. When omitted, a no-op instance is created internally.
+</ParamField>
+
+**Example**
+
+```typescript
+import { Agent } from '@svantic/sdk';
+import { SvanticTelemetry } from '@svantic/sdk/telemetry';
+
+const telemetry = SvanticTelemetry.init({
+  service_name: 'my-agent',
+  instance_id: 'pod-abc-123',
+  export: { type: 'otlp', endpoint: 'http://collector:4318' },
+});
+
+const agent = new Agent({
+  name: 'my-agent',
+  description: 'Does useful things.',
+  url: 'http://localhost:4000',
+  version: '2.0.0',
+  agent_type: 'my-agent',
+  instance_id: 'pod-abc-123',
+  context: { region: 'us-east-1' },
+  telemetry,
+});
+```
+
+---
+
+## Methods
+
+### `define_capability(config: CapabilityConfig): void`
+
+Register a capability that this agent exposes. Capabilities appear as skills in the agent card and are invoked via structured `DataPart` messages over A2A.
+
+Call this before `expose()` so the capability is included in the agent card served at discovery time.
+
+#### CapabilityConfig
+
+<ParamField body="name" type="string" required>
+  Unique capability name in snake_case, for example `extract_page_content`. This name is used as the skill ID in the agent card and must match the name remote agents pass when invoking the capability.
+</ParamField>
+
+<ParamField body="description" type="string" required>
+  Human-readable description shown to remote agents and the LLM when selecting capabilities.
+</ParamField>
+
+<ParamField body="parameters" type="CapabilitySchema" required>
+  JSON Schema defining the capability's input parameters. Must be an object schema with a `properties` map. Used for structured invocation validation and surfaced in the agent card.
+
+  ```typescript
+  interface CapabilitySchema {
+    type: 'object';
+    properties: Record<string, SchemaProperty>;
+    required?: string[];
+  }
+
+  interface SchemaProperty {
+    type: 'string' | 'number' | 'boolean' | 'integer' | 'array' | 'object';
+    description?: string;
+    enum?: string[];
+    default?: unknown;
+    items?: SchemaProperty;
+    properties?: Record<string, SchemaProperty>;
+    required?: string[];
+  }
+  ```
+</ParamField>
+
+<ParamField body="handler" type="(args: Record<string, unknown>, context: CapabilitySessionContext) => Promise<unknown>" required>
+  Async function invoked when a remote agent calls this capability. Receives the capability arguments and a session context object.
+
+  ```typescript
+  interface CapabilitySessionContext {
+    session_id: string; // The session this invocation belongs to
+    tenant_id: string;  // Tenant that owns the session
+  }
+  ```
+
+  The value you return is serialized and sent back to the caller as a `DataPart` with `{ result: <your return value> }`.
+</ParamField>
+
+<ParamField body="tags" type="string[]">
+  Optional categorization tags included in the agent card skill entry.
+</ParamField>
+
+**Example**
+
+```typescript
+agent.define_capability({
+  name: 'get_weather',
+  description: 'Returns current weather for a city.',
+  parameters: {
+    type: 'object',
+    properties: {
+      city: { type: 'string', description: 'City name.' },
+      units: { type: 'string', enum: ['celsius', 'fahrenheit'], default: 'celsius' },
+    },
+    required: ['city'],
+  },
+  tags: ['weather', 'external-api'],
+  handler: async ({ city, units }, ctx) => {
+    console.log(`Invoked by session ${ctx.session_id} for tenant ${ctx.tenant_id}`);
+    return { temperature: 22, unit: units ?? 'celsius' };
+  },
+});
+```
+
+---
+
+### `register_mcp(server_name, config, options?): Promise<string[]>`
+
+Connect to an MCP server, discover its tools, and register each tool as an A2A capability. The MCP server runs as a child process managed by this agent — tool invocations are proxied through the local bridge.
+
+Call this before `expose()` so the MCP tools appear in the agent card.
+
+```typescript
+async register_mcp(
+  server_name: string,
+  config: McpServerSpawnConfig,
+  options?: { tool_prefix?: string },
+): Promise<string[]>
+```
+
+<ParamField body="server_name" type="string" required>
+  Logical name for the MCP server, for example `chrome-devtools`. Used as the default `tool_prefix` (hyphens converted to underscores).
+</ParamField>
+
+<ParamField body="config" type="McpServerSpawnConfig" required>
+  Spawn configuration for the MCP server process.
+
+  ```typescript
+  interface McpServerSpawnConfig {
+    command: string;   // e.g. 'npx'
+    args?: string[];   // e.g. ['chrome-devtools-mcp@latest']
+    env?: Record<string, string>;
+  }
+  ```
+</ParamField>
+
+<ParamField body="options.tool_prefix" type="string">
+  Override the prefix prepended to all registered capability names. Defaults to `server_name` with hyphens replaced by underscores.
+</ParamField>
+
+Returns an array of the registered capability names, for example `['chrome_devtools_screenshot', 'chrome_devtools_navigate']`.
+
+**Example**
+
+```typescript
+const registered = await agent.register_mcp(
+  'chrome-devtools',
+  { command: 'npx', args: ['chrome-devtools-mcp@latest'] },
+);
+// registered → ['chrome_devtools_screenshot', 'chrome_devtools_navigate', ...]
+
+agent.expose(app);
+```
+
+<Warning>
+Call `register_mcp()` before `expose()`. The agent card is built once when `expose()` is called; capabilities added after that call are not reflected in discovery.
+</Warning>
+
+---
+
+### `expose(app: Express, endpoint_path?: string): void`
+
+Mount the A2A endpoints on an Express application. Creates two routes:
+
+- `/.well-known/agent-card.json` — serves the agent card for discovery
+- `endpoint_path` (default `/ask`) — JSON-RPC 2.0 endpoint that accepts A2A task messages
+
+```typescript
+expose(app: Express, endpoint_path?: string): void
+```
+
+<ParamField body="app" type="Express" required>
+  An Express application instance. The SDK supports Express 4 and Express 5.
+</ParamField>
+
+<ParamField body="endpoint_path" type="string" default="/ask">
+  Path for the JSON-RPC endpoint. Must begin with `/`.
+</ParamField>
+
+**Example**
+
+```typescript
+import express from 'express';
+
+const app = express();
+app.use(express.json());
+
+agent.define_capability({ /* ... */ });
+agent.expose(app, '/rpc');
+
+app.listen(4000, () => console.log('Agent ready on :4000'));
+```
+
+---
+
+### `build_agent_card(): AgentCard`
+
+Build and return the A2A agent card for this agent. The card includes all registered capabilities as skills with their parameter schemas attached as a Svantic-specific extension.
+
+You do not typically need to call this directly — `expose()` calls it internally. Use it when you need the card object for inspection or manual registration.
+
+```typescript
+build_agent_card(): AgentCard
+```
+
+---
+
+### `set_context(context: Record<string, unknown>): void`
+
+Merge new key-value pairs into the agent's local context. This performs a shallow merge — existing keys not present in `context` are preserved.
+
+```typescript
+set_context(context: Record<string, unknown>): void
+```
+
+This method updates the in-memory context only. To propagate the update to the mesh router, use `MeshConnector` after calling this method.
+
+**Example**
+
+```typescript
+agent.set_context({ page_url: 'https://app.example.com/dashboard' });
+```
+
+---
+
+### `close(): Promise<void>`
+
+Flush telemetry, shut down all active MCP bridges, and kill their child processes. Call this on application shutdown to avoid orphaned processes.
+
+```typescript
+async close(): Promise<void>
+```
+
+**Example**
+
+```typescript
+process.on('SIGTERM', async () => {
+  await agent.close();
+  process.exit(0);
+});
+```
+
+---
+
+## Properties
+
+All properties are read-only getters.
+
+<ResponseField name="name" type="string">
+  The agent's display name, as passed to the constructor.
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  The agent's description string.
+</ResponseField>
+
+<ResponseField name="url" type="string">
+  The agent's base URL with trailing slashes stripped.
+</ResponseField>
+
+<ResponseField name="agent_type" type="string">
+  The logical agent type for mesh routing. Defaults to `name`.
+</ResponseField>
+
+<ResponseField name="instance_id" type="string">
+  The unique instance identifier for this running process.
+</ResponseField>
+
+<ResponseField name="context" type="Record<string, unknown>">
+  The current instance context. Mutable via `set_context()`.
+</ResponseField>
+
+<ResponseField name="capabilities" type="Map<string, CapabilityConfig>">
+  All registered capabilities, keyed by capability name.
+</ResponseField>
+
+<ResponseField name="telemetry" type="SvanticTelemetry">
+  The `SvanticTelemetry` instance used for span creation, usage recording, and export. Use `telemetry.get_tracer()` for manual instrumentation; use `telemetry.event()` to emit custom events.
+</ResponseField>
+
+<ResponseField name="tracer" type="SvanticTracer">
+  Convenience accessor for the tracer returned by `telemetry.get_tracer()`.
+</ResponseField>
+
+<ResponseField name="request_handler" type="DefaultRequestHandler | null">
+  The underlying `@a2a-js/sdk` `DefaultRequestHandler`. Available after `expose()` is called; `null` before that. Intended for advanced use and testing.
+</ResponseField>
+
+---
+
+## Type reference
+
+### `AgentConfig`
+
+```typescript
+interface AgentConfig {
+  name: string;
+  description: string;
+  url: string;
+  version?: string;
+  agent_type?: string;
+  instance_id?: string;
+  context?: Record<string, unknown>;
+  telemetry?: SvanticTelemetry;
+}
+```
+
+### `CapabilityConfig`
+
+```typescript
+interface CapabilityConfig {
+  name: string;
+  description: string;
+  parameters: CapabilitySchema;
+  tags?: string[];
+  handler: (
+    args: Record<string, unknown>,
+    context: CapabilitySessionContext,
+  ) => Promise<unknown>;
+}
+```
+
+### `CapabilitySchema`
+
+```typescript
+interface CapabilitySchema {
+  type: 'object';
+  properties: Record<string, SchemaProperty>;
+  required?: string[];
+}
+```
+
+### `CapabilitySessionContext`
+
+```typescript
+interface CapabilitySessionContext {
+  session_id: string;
+  tenant_id: string;
+}
+```
+
+### `AgentInstanceMeta`
+
+Fields embedded in the agent card `extensions` object and in registration payloads.
+
+```typescript
+interface AgentInstanceMeta {
+  agent_type: string;
+  instance_id: string;
+  context: Record<string, unknown>;
+}
+```

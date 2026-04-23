@@ -1,0 +1,213 @@
+---
+title: "Trigger Agent Sessions via Webhooks"
+description: "Connect GitHub, JIRA, Slack, Bitbucket, Zendesk, and Datadog to Svantic so that inbound events automatically start agent sessions without any manual intervention."
+---
+
+Svantic exposes a single webhook receiver endpoint. When an external service posts an event to it, Svantic validates the request signature, extracts the event type, formats a prompt, and starts an agent session — all without any code on your side. This page walks you through configuring each supported provider and explains how signature verification works for each one.
+
+## Webhook endpoint
+
+All inbound events are sent to a single URL regardless of provider:
+
+```
+POST https://<your-svantic-host>/webhooks/receive
+```
+
+Every request must include a `provider` field in the JSON body. This is how Svantic routes the event to the correct parser and signature verifier.
+
+<Note>
+Svantic responds immediately with `{ "status": "accepted" }` and processes the event asynchronously. Your webhook source will not time out waiting for agent work to complete.
+</Note>
+
+## Supported providers
+
+Svantic supports the following providers out of the box. Each has its own event extraction logic and signature scheme.
+
+| Provider   | Event source             | Signature header                                |
+| ---------- | ------------------------ | ----------------------------------------------- |
+| `github`   | `x-github-event` header  | `X-Hub-Signature-256` (HMAC-SHA256)             |
+| `jira`     | `webhookEvent` body field | `X-Webhook-Secret` (shared token)              |
+| `slack`    | `event.type` body field  | `X-Slack-Signature` + `X-Slack-Request-Timestamp` (HMAC-SHA256) |
+| `bitbucket`| `x-event-key` header     | `X-Hub-Signature` (HMAC-SHA256)                 |
+| `zendesk`  | `event` body field       | `X-Webhook-Secret` (shared token)               |
+| `datadog`  | Always `"alert"`         | `X-Webhook-Secret` (shared token)               |
+| `custom`   | `x-event-type` header    | `X-Webhook-Secret` (shared token)               |
+
+## Setting up a webhook
+
+<Steps>
+  <Step title="Create a webhook endpoint in the dashboard">
+    In the Svantic dashboard, navigate to **Settings → Webhooks** and click **New webhook endpoint**. Copy the full URL — you will paste this into your external service.
+  </Step>
+  <Step title="Choose your provider and configure a secret">
+    Select the provider from the dropdown. If your provider supports secrets or signatures, enter a shared secret. Svantic stores this securely and uses it to verify every inbound request.
+
+    Providers that use a shared token (`jira`, `zendesk`, `datadog`, `custom`) send the token in the `X-Webhook-Secret` header. Providers that sign payloads (`github`, `slack`, `bitbucket`) use HMAC-SHA256 with the secret you configure here.
+  </Step>
+  <Step title="Register the endpoint in your external service">
+    Paste the Svantic webhook URL into the external service. The exact steps differ per provider:
+
+    <AccordionGroup>
+      <Accordion title="GitHub">
+        Go to your repository (or organization) **Settings → Webhooks → Add webhook**. Set the Payload URL to your Svantic endpoint. Set Content type to `application/json`. Paste your secret into the Secret field. GitHub will send `X-Hub-Signature-256` on every request.
+      </Accordion>
+      <Accordion title="JIRA">
+        In JIRA, open **System → WebHooks** and click **Create a WebHook**. Paste the endpoint URL. Under **JQL**, scope the events you want. JIRA does not natively sign payloads — set `X-Webhook-Secret` as a custom header in your JIRA webhook configuration, using the same secret you entered in Svantic.
+      </Accordion>
+      <Accordion title="Slack">
+        Create a Slack app and enable **Event Subscriptions**. Paste the Svantic URL as the Request URL. Slack will immediately send a `url_verification` challenge — Svantic handles this automatically and responds with the correct `challenge` value. Add your signing secret to Svantic's webhook config. Slack sends `X-Slack-Signature` and `X-Slack-Request-Timestamp` on every event.
+      </Accordion>
+      <Accordion title="Bitbucket">
+        In Bitbucket, open your repository **Settings → Webhooks → Add webhook**. Paste the endpoint URL. Bitbucket sends `X-Hub-Signature` using HMAC-SHA256. Enter the same secret in Svantic.
+      </Accordion>
+      <Accordion title="Zendesk">
+        In Zendesk, open **Admin Center → Apps and integrations → Webhooks** and create a new webhook. Paste the endpoint URL. Add a custom header `X-Webhook-Secret` with your shared secret value.
+      </Accordion>
+      <Accordion title="Datadog">
+        In Datadog, open **Integrations → Webhooks** and add a new webhook. Paste the endpoint URL. Add a custom header `X-Webhook-Secret` with your shared secret value. Datadog sends alert events; Svantic treats every Datadog event as type `"alert"`.
+      </Accordion>
+    </AccordionGroup>
+  </Step>
+  <Step title="Test the connection">
+    Trigger a test event from your external service (GitHub provides a "Redeliver" button; Slack sends a verification challenge on save). You should see a new session appear in your Svantic dashboard within a few seconds.
+  </Step>
+</Steps>
+
+## Example payloads
+
+The following examples show the minimum body structure Svantic expects for each provider. Your external service sends these automatically — you do not construct them yourself. They are included here so you can understand how Svantic parses each event.
+
+<Tabs>
+  <Tab title="GitHub">
+    GitHub sends the event type in the `x-github-event` header. The `provider` field below must be present in the request body.
+
+    ```json
+    {
+      "provider": "github",
+      "action": "opened",
+      "pull_request": {
+        "number": 42,
+        "title": "Add rate limiting middleware",
+        "user": { "login": "jsmith" },
+        "head": { "ref": "feature/rate-limiting" },
+        "base": { "ref": "main" }
+      },
+      "repository": {
+        "full_name": "acme/backend"
+      }
+    }
+    ```
+
+    The `x-github-event` header on this request would be `pull_request`. Svantic formats this into an agent prompt like:
+
+    > GitHub webhook: pull request opened — PR #42 "Add rate limiting middleware" on acme/backend. Review and take appropriate action.
+  </Tab>
+  <Tab title="JIRA">
+    JIRA sends the event type inside the body as `webhookEvent`.
+
+    ```json
+    {
+      "provider": "jira",
+      "webhookEvent": "jira:issue_updated",
+      "issue": {
+        "key": "BACKEND-101",
+        "fields": {
+          "summary": "Improve error messages in auth service",
+          "status": { "name": "In Progress" },
+          "assignee": { "displayName": "Jane Doe" },
+          "labels": ["backend", "auth"]
+        }
+      }
+    }
+    ```
+
+    Svantic formats this into an agent prompt like:
+
+    > JIRA webhook: jira:issue_updated — issue BACKEND-101 "Improve error messages in auth service". Review and take appropriate action.
+  </Tab>
+  <Tab title="Slack">
+    Slack sends event data inside an `event` object. For the initial setup handshake, Slack sends a `url_verification` event — Svantic handles this automatically.
+
+    ```json
+    {
+      "provider": "slack",
+      "event": {
+        "type": "message",
+        "text": "Can someone review PR #42?",
+        "channel": "C01234ABCDE",
+        "user": "U09876XYZ"
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Zendesk">
+    Zendesk sends the event type inside the body as `event`.
+
+    ```json
+    {
+      "provider": "zendesk",
+      "event": "ticket.created",
+      "ticket": {
+        "id": 9001,
+        "subject": "Cannot log in after password reset",
+        "status": "new"
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Signature verification
+
+When you configure a secret for a provider, Svantic validates every inbound request before passing it to an agent. If verification fails, Svantic returns `401` and discards the event.
+
+<Tabs>
+  <Tab title="GitHub">
+    GitHub computes an HMAC-SHA256 signature over the raw JSON body and sends it in the `X-Hub-Signature-256` header, prefixed with `sha256=`.
+
+    Svantic recomputes:
+    ```
+    sha256=HMAC-SHA256(secret, body)
+    ```
+    and compares it to the header value.
+  </Tab>
+  <Tab title="Slack">
+    Slack includes both `X-Slack-Signature` and `X-Slack-Request-Timestamp` headers. Svantic builds the base string and verifies:
+
+    ```
+    base_string = "v0:" + timestamp + ":" + body
+    expected    = "v0=" + HMAC-SHA256(secret, base_string)
+    ```
+
+    The header value must match `expected`.
+  </Tab>
+  <Tab title="Bitbucket">
+    Bitbucket sends `X-Hub-Signature` with an HMAC-SHA256 signature prefixed with `sha256=`, identical in structure to GitHub.
+
+    ```
+    sha256=HMAC-SHA256(secret, body)
+    ```
+  </Tab>
+  <Tab title="JIRA / Zendesk / Datadog / custom">
+    These providers send a plain shared token in the `X-Webhook-Secret` header. Svantic compares it directly to the secret you configured. There is no HMAC computation — the token itself is the credential.
+
+    ```
+    X-Webhook-Secret: <your-secret>
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+If you do not configure a secret for a provider, Svantic skips signature verification entirely and accepts all inbound requests for that provider. Always configure a secret in production.
+</Warning>
+
+## What happens when a webhook fires
+
+When Svantic receives and validates a webhook event, it:
+
+1. Extracts the event type using the provider-specific field or header.
+2. Formats a human-readable prompt describing what happened (for example, "GitHub webhook: pull request opened — PR #42 …").
+3. Starts a new agent session with that prompt.
+4. The session is routed through the Mesh to the agent best suited to handle the event, which uses its configured tools to take action.
+
+Your agents do not need any special webhook-handling code. As long as the relevant tools are loaded (for example, `github` tools for a GitHub event), the agent can act on the event autonomously.

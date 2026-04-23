@@ -1,0 +1,99 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Svantic",
+  "theme": "luma",
+  "favicon": "https://media.brand.dev/34e71f82-bf7f-473a-9c8a-da0e37c3ba98.png",
+  "colors": {
+    "primary": "#040404",
+    "light": "#7c7c7c",
+    "dark": "#c3c3c3"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/svantic"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Docs",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "authentication"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/agents",
+              "concepts/sessions",
+              "concepts/tenants",
+              "concepts/telemetry"
+            ]
+          },
+          {
+            "group": "Building Agents",
+            "pages": [
+              "guides/build-agent",
+              "guides/capabilities",
+              "guides/mcp-tools",
+              "guides/connect-mesh"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/webhooks",
+              "integrations/builtin-tools",
+              "integrations/knowledge-base"
+            ]
+          },
+          {
+            "group": "Platform",
+            "pages": [
+              "platform/dashboard",
+              "platform/api-keys",
+              "platform/alerts",
+              "platform/security"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "SDK Reference",
+        "groups": [
+          {
+            "group": "@svantic/sdk",
+            "pages": [
+              "sdk/overview",
+              "sdk/agent",
+              "sdk/remote-agent",
+              "sdk/mesh-connector",
+              "sdk/tools"
+            ]
+          },
+          {
+            "group": "@svantic/telemetry",
+            "pages": [
+              "telemetry/overview",
+              "telemetry/tracing",
+              "telemetry/propagation"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "cli/overview",
+              "cli/commands"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

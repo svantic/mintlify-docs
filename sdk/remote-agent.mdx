@@ -1,0 +1,446 @@
+---
+title: "RemoteAgent and AgentDiscovery Reference"
+description: "Full reference for RemoteAgent, AgentDiscovery, and MessageBuilder — send tasks, stream responses, invoke capabilities, and discover A2A agents by URL."
+---
+
+`RemoteAgent` connects to and communicates with any A2A-compliant agent. It wraps the `@a2a-js/sdk` client to provide typed methods for text messages, streaming over SSE, and structured capability invocations. `AgentDiscovery` lets you inspect an agent's card before connecting. `MessageBuilder` gives you a fluent API for constructing rich A2A messages with file attachments and metadata.
+
+## RemoteAgent
+
+### `RemoteAgent.connect(url, token?): Promise<RemoteAgent>`
+
+Static factory method. Fetches the agent card from `/.well-known/agent-card.json`, creates the JSON-RPC transport, and returns a ready-to-use `RemoteAgent` instance.
+
+```typescript
+static async connect(url: string, token?: string): Promise<RemoteAgent>
+```
+
+<ParamField body="url" type="string" required>
+  Base URL of the remote agent, for example `http://localhost:4000`. The constructor does not append a path — the card resolver appends `/.well-known/agent-card.json` automatically.
+</ParamField>
+
+<ParamField body="token" type="string">
+  Optional JWT. When provided, every outbound HTTP request (card fetch and task calls) includes an `Authorization: Bearer <token>` header.
+</ParamField>
+
+**Example**
+
+```typescript
+import { RemoteAgent } from '@svantic/sdk';
+
+// Unauthenticated
+const agent = await RemoteAgent.connect('http://localhost:4000');
+
+// With a mesh JWT
+const agent = await RemoteAgent.connect('http://localhost:4000', meshToken);
+```
+
+---
+
+### `send(message, context_id?): Promise<Message | Task>`
+
+Send a plain text message and wait for the full response. Use this for natural language tasks where you do not need streaming.
+
+```typescript
+async send(message: string, context_id?: string): Promise<Message | Task>
+```
+
+<ParamField body="message" type="string" required>
+  The text message to send to the remote agent.
+</ParamField>
+
+<ParamField body="context_id" type="string">
+  A2A context ID for conversation continuity. Corresponds to the session ID. When provided, the message is stamped with `contextId` so the remote agent can maintain state across multiple turns.
+</ParamField>
+
+Returns an A2A `Message` or `Task` object depending on how the remote agent responds.
+
+**Example**
+
+```typescript
+const response = await agent.send('Extract all line items from the latest invoice.');
+```
+
+---
+
+### `send_stream(message, context_id?): AsyncGenerator<A2AStreamEventData>`
+
+Send a text message and stream back responses via A2A SSE. The generator yields `Message`, `Task`, `TaskStatusUpdateEvent`, and `TaskArtifactUpdateEvent` objects as they arrive.
+
+```typescript
+async *send_stream(
+  message: string,
+  context_id?: string,
+): AsyncGenerator<A2AStreamEventData, void, undefined>
+```
+
+<ParamField body="message" type="string" required>
+  The text message to send.
+</ParamField>
+
+<ParamField body="context_id" type="string">
+  A2A context ID for conversation continuity.
+</ParamField>
+
+**Example**
+
+```typescript
+for await (const event of agent.send_stream('Summarize this document.', sessionId)) {
+  if ('parts' in event) {
+    // Message event
+    for (const part of event.parts) {
+      if (part.kind === 'text') process.stdout.write(part.text);
+    }
+  }
+}
+```
+
+---
+
+### `send_stream_message(message): AsyncGenerator<A2AStreamEventData>`
+
+Send a full A2A `Message` object (with `DataPart`s) and stream back responses. Use this when you need to carry files, session metadata, or Svantic-specific fields alongside the user text — typically after building a message with `MessageBuilder`.
+
+```typescript
+async *send_stream_message(
+  message: Message,
+): AsyncGenerator<A2AStreamEventData, void, undefined>
+```
+
+<ParamField body="message" type="Message" required>
+  A fully constructed A2A `Message` object. Use `MessageBuilder` to create it.
+</ParamField>
+
+**Example**
+
+```typescript
+import { MessageBuilder } from '@svantic/sdk';
+
+const msg = new MessageBuilder('Analyze this PDF.')
+  .with_context_id(session_id)
+  .with_file({ name: 'report.pdf', mime_type: 'application/pdf', size: 48200, data: base64Data })
+  .build();
+
+for await (const event of agent.send_stream_message(msg)) {
+  // handle streaming events
+}
+```
+
+---
+
+### `invoke_capability(capability, args, session_context?, context_id?): Promise<unknown>`
+
+Invoke a specific named capability on the remote agent. Sends a `DataPart` with `{ capability, args, session }` and extracts the result from the response.
+
+This is the typed, deterministic alternative to `send()`. Remote agent capability handlers receive the args and the session context directly — no natural language interpretation occurs.
+
+```typescript
+async invoke_capability(
+  capability: string,
+  args: Record<string, unknown>,
+  session_context?: InvocationContext,
+  context_id?: string,
+): Promise<unknown>
+```
+
+<ParamField body="capability" type="string" required>
+  The capability name to invoke, matching the `name` field in `CapabilityConfig` on the remote agent.
+</ParamField>
+
+<ParamField body="args" type="Record<string, unknown>" required>
+  Arguments to pass to the capability handler. Must match the capability's `CapabilitySchema`.
+</ParamField>
+
+<ParamField body="session_context" type="InvocationContext">
+  Session and tenant context forwarded to the remote handler.
+
+  ```typescript
+  interface InvocationContext {
+    session_id: string;
+    tenant_id: string;
+  }
+  ```
+</ParamField>
+
+<ParamField body="context_id" type="string">
+  A2A context ID for conversation continuity.
+</ParamField>
+
+Returns the value returned by the remote capability handler (extracted from the `DataPart` `result` field).
+
+**Example**
+
+```typescript
+const result = await agent.invoke_capability(
+  'extract_page_content',
+  { selector: '#main', format: 'markdown' },
+  { session_id: 'sess-abc', tenant_id: 'acme' },
+);
+```
+
+---
+
+### Properties
+
+<ResponseField name="agent_card" type="AgentCard">
+  The remote agent's full A2A agent card, fetched during `connect()`.
+</ResponseField>
+
+<ResponseField name="skills" type="ExtendedAgentSkill[]">
+  Skills published by the remote agent. Each entry includes `id`, `name`, `description`, `tags`, and the `parameters` schema (a Svantic extension for structured invocation).
+
+  ```typescript
+  interface ExtendedAgentSkill {
+    id: string;
+    name: string;
+    description: string;
+    tags: string[];
+    parameters?: CapabilitySchema;
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Agent name from the remote agent card.
+</ResponseField>
+
+<ResponseField name="url" type="string">
+  Agent URL from the remote agent card (the JSON-RPC endpoint URL, not the base URL).
+</ResponseField>
+
+<ResponseField name="client" type="Client">
+  The underlying `@a2a-js/sdk` `Client` instance. Use this for advanced operations not covered by the typed methods above.
+</ResponseField>
+
+---
+
+## AgentDiscovery
+
+`AgentDiscovery` fetches agent cards from `/.well-known/agent-card.json` with optional in-memory caching. Use it to inspect a remote agent before deciding whether to connect, or to batch-discover a list of agents at startup.
+
+### Constructor
+
+```typescript
+new AgentDiscovery(ttl_ms?: number)
+```
+
+<ParamField body="ttl_ms" type="number" default="60000">
+  Cache time-to-live in milliseconds. Cached cards are returned for repeat calls within this window. Set to `0` to disable caching entirely.
+</ParamField>
+
+---
+
+### `discover(base_url, force_refresh?): Promise<AgentCard>`
+
+Fetch the agent card for a single agent. Returns a cached result if one exists and has not expired.
+
+```typescript
+async discover(base_url: string, force_refresh?: boolean): Promise<AgentCard>
+```
+
+<ParamField body="base_url" type="string" required>
+  Base URL of the agent, for example `http://localhost:4000`. Trailing slashes are normalized.
+</ParamField>
+
+<ParamField body="force_refresh" type="boolean" default="false">
+  When `true`, bypass the cache and fetch a fresh card even if a valid cached entry exists.
+</ParamField>
+
+**Example**
+
+```typescript
+import { AgentDiscovery } from '@svantic/sdk';
+
+const discovery = new AgentDiscovery(30_000); // 30-second TTL
+const card = await discovery.discover('http://localhost:4000');
+console.log(card.name, card.skills);
+```
+
+---
+
+### `discover_all(base_urls): Promise<AgentCard[]>`
+
+Discover multiple agents in parallel. Failed discoveries are silently skipped — only successful cards are returned.
+
+```typescript
+async discover_all(base_urls: string[]): Promise<AgentCard[]>
+```
+
+<ParamField body="base_urls" type="string[]" required>
+  Array of agent base URLs to discover.
+</ParamField>
+
+**Example**
+
+```typescript
+const cards = await discovery.discover_all([
+  'http://agent-a:4000',
+  'http://agent-b:4001',
+  'http://agent-c:4002',
+]);
+console.log(`Found ${cards.length} agents`);
+```
+
+---
+
+### `invalidate(base_url): void`
+
+Remove a specific URL from the cache, forcing the next `discover()` call to fetch fresh data.
+
+```typescript
+invalidate(base_url: string): void
+```
+
+---
+
+### `invalidate_all(): void`
+
+Clear the entire cache.
+
+```typescript
+invalidate_all(): void
+```
+
+---
+
+### Properties
+
+<ResponseField name="cache_size" type="number">
+  Number of entries currently in the cache.
+</ResponseField>
+
+---
+
+## MessageBuilder
+
+`MessageBuilder` is a fluent builder for constructing A2A `Message` objects that carry text, file attachments, and Svantic-specific metadata in `DataPart`s.
+
+### Constructor
+
+```typescript
+new MessageBuilder(text: string)
+```
+
+<ParamField body="text" type="string" required>
+  The user-facing text message. Encoded as the first `TextPart` in the built message.
+</ParamField>
+
+---
+
+### Methods
+
+All builder methods return `this`, so you can chain them.
+
+#### `with_context_id(id: string): this`
+
+Set the A2A `contextId` for conversation continuity. Pass your session ID here to maintain state across multiple turns with the same remote agent.
+
+#### `with_action_data(data: Record<string, string>): this`
+
+Attach form submission data as key-value pairs. Used when forwarding HTML form submissions to an agent.
+
+#### `with_context(ctx: Record<string, unknown>): this`
+
+Attach a session context delta. Use this to send runtime metadata alongside the message, for example `{ cdp_ws_endpoint: '...', page_url: '...' }`.
+
+#### `with_target_agent(agent: string): this`
+
+Set a target agent name to bypass the orchestrator and route directly to a specific agent.
+
+#### `with_yolo_mode(yolo: boolean): this`
+
+Enable or disable yolo mode (auto-approve plans). When `true`, the receiving agent or orchestrator skips confirmation steps.
+
+#### `with_file(file: FilePayload): this`
+
+Add a single file attachment.
+
+#### `with_files(files: FilePayload[]): this`
+
+Add multiple file attachments at once.
+
+---
+
+### `build(): Message`
+
+Build and return the A2A `Message`. Calling this produces:
+
+- Part 0: `TextPart` — the message text.
+- Part 1 (optional): `DataPart` — present only when at least one metadata field is set. Carries `action_data`, `context`, `target_agent`, `yolo_mode`, and/or `files`.
+
+```typescript
+build(): Message
+```
+
+---
+
+### FilePayload
+
+<ResponseField name="name" type="string" required>
+  File name including extension.
+</ResponseField>
+
+<ResponseField name="mime_type" type="string" required>
+  MIME type, for example `application/pdf` or `image/png`.
+</ResponseField>
+
+<ResponseField name="size" type="number" required>
+  File size in bytes.
+</ResponseField>
+
+<ResponseField name="content" type="string">
+  UTF-8 text content. Use for text files sent inline.
+</ResponseField>
+
+<ResponseField name="data" type="string">
+  Base64-encoded binary data. Use for images, PDFs, and other binary formats.
+</ResponseField>
+
+<ResponseField name="file_uri" type="string">
+  Gemini Files API URI for a pre-uploaded file.
+</ResponseField>
+
+<ResponseField name="artifact_ref" type="string">
+  Legacy artifact reference. Use `file_uri` or `data` for new integrations.
+</ResponseField>
+
+**Full example**
+
+```typescript
+import { RemoteAgent, MessageBuilder } from '@svantic/sdk';
+
+const agent = await RemoteAgent.connect('https://agent.your-domain.com', meshToken);
+
+const msg = new MessageBuilder('Review the attached contract and flag any unusual clauses.')
+  .with_context_id(sessionId)
+  .with_context({ datasource_id: 'legal-review' })
+  .with_file({
+    name: 'contract.pdf',
+    mime_type: 'application/pdf',
+    size: 204800,
+    data: contractBase64,
+  })
+  .build();
+
+for await (const event of agent.send_stream_message(msg)) {
+  // handle streaming events
+}
+```
+
+---
+
+## A2A stream event types
+
+The `A2AStreamEventData` type is a union of all events that can appear in a stream:
+
+```typescript
+type A2AStreamEventData =
+  | Message
+  | Task
+  | TaskStatusUpdateEvent
+  | TaskArtifactUpdateEvent;
+```
+
+<Tip>
+Narrow the type at runtime using the `kind` or `role` discriminant fields present on each A2A object. `Message` has a `role` field; `Task` has a `status` field; update events have a `kind` of `'task-status-update'` or `'task-artifact-update'`.
+</Tip>

@@ -1,0 +1,98 @@
+---
+title: "Organizations and Tenants in Svantic"
+description: "Learn how Svantic's multi-tenant model isolates data, controls agent admission, and manages members — each organization is a fully isolated tenant."
+---
+
+Svantic is a multi-tenant platform. Each organization you create in Svantic becomes a **tenant** — an isolated workspace with its own agents, sessions, members, traces, and usage records. Nothing crosses tenant boundaries: a session created under one tenant is invisible to another, and agents must be explicitly admitted to a tenant before they can join that tenant's sessions.
+
+## Tenant identity
+
+Every tenant has two identifiers:
+
+- **Tenant ID** (`client_id`) — a URL-safe slug that identifies your organization. It is derived from your organization name when you sign up, or you can set it explicitly when creating a tenant via the API. For example: `acme` or `acme-corp`.
+- **Tenant secret** (`client_secret`) — a one-time secret returned when the tenant is created. Store it securely; it is not retrievable after creation. You use this secret to authenticate agents and telemetry exporters with the Mesh.
+
+<Warning>
+  The `client_secret` is shown only once, at tenant creation time. If you lose it, you will need to rotate it. Treat it like a private API key.
+</Warning>
+
+## Machine-to-machine authentication
+
+Agents authenticate with the Mesh using the tenant ID and secret — not a user password. This is a machine-to-machine credential exchange that produces a short-lived JWT scoped to the tenant and agent type.
+
+```typescript
+const mesh = new MeshConnector(agent, {
+  mesh_url: 'https://mesh.your-domain.com',
+  tenant_id: 'acme',
+  tenant_secret: 'your-tenant-secret',
+});
+await mesh.connect();
+```
+
+The `MeshConnector` handles the token exchange and refresh automatically. You never need to manage the JWT directly.
+
+## Members and roles
+
+Users belong to a tenant with a role that controls what they can do:
+
+| Role | Access |
+|---|---|
+| `admin` | Full access: manage members, agent allow-lists, API keys, and billing |
+| `member` | Read and write access to sessions and agents; cannot manage tenant settings |
+
+You add members through the Dashboard under **Settings → Members**, or by provisioning them via the API when you create the tenant. A user's email is globally unique — if someone is already a Svantic user, adding them to a tenant links their existing account.
+
+## Agent admission
+
+By default, a new tenant is created with `policy_mode: open`, which allows any registered agent type to join its sessions. For production tenants you should switch to `allow-list` mode, which requires you to explicitly approve each agent type before it can participate.
+
+The three policy modes are:
+
+| Mode | Behavior |
+|---|---|
+| `open` | Any registered agent type can join sessions |
+| `allow-list` | Only agent types on the tenant's `allowed_types` list can join sessions |
+| `audit` | Any agent type can join, but all joins are logged for review |
+
+When `policy_mode` is `allow-list`, a session init request that includes an agent type not on the `allowed_types` list will be rejected with a `403` error:
+
+```json
+{
+  "error": "Agent type \"my-agent\" is not admitted for tenant \"acme\". Add it to the tenant's allow-list first.",
+  "admission": "pending"
+}
+```
+
+You can manage the allow-list in the Dashboard under **Settings → Agents**, or via the API.
+
+<Tip>
+  When you create a new tenant, Svantic automatically seeds it with the platform's built-in agent types. You only need to add allow-list entries for your own custom agents.
+</Tip>
+
+## Isolation guarantees
+
+All data in Svantic is scoped to a tenant. The following are always isolated per tenant:
+
+- **Sessions** — session history, bindings, and in-flight state
+- **Traces** — distributed traces from `/ask` requests and agent capability calls
+- **Events** — system events (session created, agent bound, etc.)
+- **Usage records** — token counts and usage metrics
+- **API keys** — machine-to-machine keys for programmatic access
+- **Alert rules** — alerting configuration for thresholds and anomalies
+
+There is no way for one tenant to read or write another tenant's data through any Svantic API.
+
+<AccordionGroup>
+  <Accordion title="What is the difference between tenant_id and client_id?">
+    They are the same value. The `tenant_id` is the internal identifier used throughout the platform. The `client_id` label appears in authentication contexts to match the OAuth 2.0 client credentials convention used by the machine-to-machine token exchange.
+  </Accordion>
+  <Accordion title="Can a user belong to more than one tenant?">
+    Yes. A user's account is global; their role is per-tenant. A user with the email `dev@company.com` can be an `admin` in one tenant and a `member` in another.
+  </Accordion>
+  <Accordion title="How do I rotate the tenant secret?">
+    Secret rotation is available through the Dashboard under **Settings → Security**, or via the API keys management endpoints. Rotating the secret invalidates the previous value immediately — update any agents or services that use it before rotating.
+  </Accordion>
+  <Accordion title="What happens when I delete a tenant?">
+    Tenant deletion is a soft delete by default: the tenant is deactivated and its data is retained. A permanent purge requires a separate explicit API call. This two-step process protects against accidental data loss.
+  </Accordion>
+</AccordionGroup>

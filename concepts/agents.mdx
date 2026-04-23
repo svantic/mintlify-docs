@@ -1,0 +1,162 @@
+---
+title: "What Is a Svantic Agent? Capabilities and Types"
+description: "Learn how Svantic agents work: A2A-compliant Node.js services that expose named capabilities, register with the Mesh, and participate in multi-agent sessions."
+---
+
+An agent in Svantic is a Node.js service that exposes one or more named capabilities over the A2A (agent-to-agent) protocol. When a user sends a message in a session, the Mesh examines the registered agents for your organization, selects the ones whose capabilities match the request, and routes invocations to them. Agents stay decoupled from each other — they communicate only through the Mesh, which handles orchestration, context propagation, and telemetry.
+
+## The agent card
+
+Every agent advertises itself with an **agent card** — a structured JSON document served at `/.well-known/agent-card.json`. The Mesh reads the agent card when an agent registers and uses it to understand what the agent can do.
+
+The agent card includes:
+
+| Field | What it contains |
+|---|---|
+| `name` | Display name shown in the Dashboard and session logs |
+| `description` | Human-readable summary used by the LLM for routing decisions |
+| `url` | The endpoint the Mesh calls to invoke capabilities |
+| `version` | Optional version string for your own tracking |
+| `skills` | The list of capabilities with parameter schemas |
+| `extensions.agent_type` | Logical type for routing (see below) |
+| `extensions.instance_id` | Unique identifier for this running instance |
+
+You never write the agent card manually. The `Agent` class from `@svantic/sdk` builds it from your configuration and capability registrations.
+
+## Agent types and instances
+
+Svantic makes a distinction between an **agent type** and an **agent instance**:
+
+- `agent_type` is the logical name for a service. All running copies of the same service share the same `agent_type` (for example, `inventory`). This is what you add to a tenant's allow-list.
+- `instance_id` is a unique identifier for one running process. It defaults to `{hostname}-{port}` but can be overridden with the `SAVANT_INSTANCE_ID` environment variable — useful in containers and Kubernetes.
+
+The Mesh uses `agent_type` for routing and uses `instance_id` to differentiate between replicas of the same service.
+
+## Defining capabilities
+
+A capability is a named function with a JSON Schema describing its inputs and an async handler that runs when the Mesh invokes it. Capabilities appear as skills in the agent card and are called via structured A2A messages.
+
+```typescript
+agent.define_capability({
+  name: 'check_stock',
+  description: 'Check current inventory for a product SKU',
+  parameters: {
+    type: 'object',
+    properties: {
+      product_id: { type: 'string', description: 'The product SKU' },
+    },
+    required: ['product_id'],
+  },
+  handler: async (args, context) => {
+    // context.session_id and context.tenant_id are available
+    return { product_id: args.product_id, available: 42 };
+  },
+});
+```
+
+The `description` field matters: the LLM reads it to decide which capability to call. Write it as a clear, specific action statement.
+
+## A minimal agent
+
+Here is a complete agent — from definition to registration with the Mesh:
+
+```typescript
+import express from 'express';
+import { Agent } from '@svantic/sdk';
+import { MeshConnector } from '@svantic/sdk/mesh';
+
+const app = express();
+
+const agent = new Agent({
+  name: 'inventory',
+  description: 'Check product stock levels and warehouse locations',
+  url: 'http://localhost:4000',
+});
+
+agent.define_capability({
+  name: 'check_stock',
+  description: 'Check current inventory for a product SKU',
+  parameters: {
+    type: 'object',
+    properties: {
+      product_id: { type: 'string', description: 'The product SKU' },
+    },
+    required: ['product_id'],
+  },
+  handler: async (args) => {
+    return { product_id: args.product_id, available: 42 };
+  },
+});
+
+agent.expose(app);
+app.listen(4000);
+
+const mesh = new MeshConnector(agent, {
+  gateway_url: 'https://gateway.your-domain.com',
+  mesh_url: 'https://mesh.your-domain.com',
+  client_id: 'your-tenant-id',
+  client_secret: 'your-tenant-secret',
+});
+await mesh.connect();
+```
+
+`agent.expose(app)` adds two routes to your Express app:
+
+- `/.well-known/agent-card.json` — the agent card for discovery
+- `/ask` — the JSON-RPC 2.0 endpoint that receives A2A invocations
+
+## MCP tool support
+
+If you have an MCP (Model Context Protocol) server, you can register its tools as capabilities without writing individual handlers. Call `register_mcp` before `expose` so the discovered tools appear in the agent card:
+
+```typescript
+await agent.register_mcp('browser', {
+  command: 'npx',
+  args: ['@playwright/mcp@latest'],
+});
+```
+
+Each MCP tool becomes a capability named `{server_name}_{tool_name}` (hyphens replaced with underscores).
+
+## Agent lifecycle
+
+<Steps>
+  <Step title="Register">
+    Call `mesh.connect()`. The `MeshConnector` uses your `client_id` and `client_secret` to register with the Gateway and exchange credentials for a short-lived JWT, then makes the agent visible in the Mesh.
+  </Step>
+  <Step title="Heartbeat">
+    The `MeshConnector` sends periodic heartbeats so the Mesh knows the agent is still alive. If heartbeats stop, the Mesh marks the instance as inactive and stops routing to it.
+  </Step>
+  <Step title="Serve invocations">
+    The Mesh calls your agent's `/ask` endpoint with structured A2A messages. Your capability handlers run locally and return results directly.
+  </Step>
+  <Step title="Deregister">
+    When your process shuts down, `MeshConnector` deregisters the instance. Call `await agent.close()` first to flush any pending telemetry.
+  </Step>
+</Steps>
+
+<Note>
+  Agent admission is controlled per tenant. Before an agent type can join a session, an admin must add it to the tenant's allow-list. See [Organizations and Tenants](/concepts/tenants) for details.
+</Note>
+
+## How the Mesh discovers and routes agents
+
+When a session receives a request, the Mesh builds a list of agents currently bound to that session. It uses the description and capability names from each agent's card to construct tool definitions for the LLM. The LLM selects which capability to invoke, and the Mesh calls the corresponding agent instance.
+
+If multiple instances of the same `agent_type` are registered, the Mesh routes to one of them — you can attach `context` metadata to your agent instance to influence routing for context-aware scenarios.
+
+<Tip>
+  Keep `agent_type` stable across deployments. It is the identifier used in tenant allow-lists and session bindings. Changing it is equivalent to registering a new agent type.
+</Tip>
+
+<AccordionGroup>
+  <Accordion title="What happens if my agent goes offline mid-session?">
+    The Mesh detects missed heartbeats and removes the instance from the active registry. Any capability invocation targeting that instance will fail with an error returned to the session. If you have multiple instances of the same agent type, the Mesh can route to another available instance.
+  </Accordion>
+  <Accordion title="Can I run an agent without connecting to the Mesh?">
+    Yes. The `Agent` class is platform-agnostic. You can run `agent.expose(app)` and call the `/ask` endpoint directly without ever using `MeshConnector`. The Mesh connection is optional and only required to participate in Svantic-managed sessions.
+  </Accordion>
+  <Accordion title="How do I pass state between capability invocations?">
+    Capability handlers receive `context.session_id` and `context.tenant_id`. Use `session_id` as a key to look up or store any session-scoped state in your own storage. Svantic does not manage capability-level state on your behalf.
+  </Accordion>
+</AccordionGroup>

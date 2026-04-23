@@ -1,0 +1,65 @@
+---
+title: "Svantic: Enterprise AI Agent Platform Overview"
+description: "Learn what Svantic is, the problems it solves, and the four platform components — Gateway, Mesh, Cortex, and Dashboard — that power your agents."
+---
+
+Svantic is an enterprise AI agent platform that lets you build, deploy, and orchestrate intelligent agents at scale. Instead of wiring together auth, routing, observability, and knowledge retrieval yourself, Svantic provides a unified runtime where agents communicate using the A2A (agent-to-agent) protocol and every interaction is traced end-to-end.
+
+## What problem does Svantic solve?
+
+Building a single AI agent is straightforward. Running dozens of specialized agents in production — with consistent auth, session management, live observability, and cross-agent coordination — is not. Svantic solves this by giving every agent a shared runtime with batteries included: authentication, routing, distributed tracing, knowledge retrieval, and a monitoring dashboard.
+
+## Platform components
+
+Svantic is made up of four services that work together. You interact with all four as you build and operate agents.
+
+<CardGroup cols={2}>
+  <Card title="Gateway" icon="shield-halved">
+    The central API layer. Handles authentication, tenant management, billing, and database ownership. Every API call — whether from your agents, the Dashboard, or the SDK — passes through or is validated by the Gateway.
+  </Card>
+  <Card title="Mesh" icon="diagram-project">
+    The agent runtime. Handles incoming `/ask` requests, routes them to the right agents, manages session lifecycle, and orchestrates multi-agent workflows using A2A. Your agents connect to the Mesh using `MeshConnector`.
+  </Card>
+  <Card title="Cortex" icon="brain">
+    The knowledge layer. Manages knowledge bases, embeddings, and vector search. Agents can query Cortex to retrieve relevant context before generating a response — enabling retrieval-augmented generation (RAG) without extra infrastructure.
+  </Card>
+  <Card title="Dashboard" icon="chart-line">
+    The web UI. Monitor live sessions, inspect distributed traces, review token usage, manage API keys, and configure alerts — all in one place. Built on real-time data from the Mesh and Gateway.
+  </Card>
+</CardGroup>
+
+## Key concepts
+
+These are the core primitives you'll encounter throughout the docs.
+
+<CardGroup cols={2}>
+  <Card title="Agents" icon="robot" href="/concepts/agents">
+    The units of capability in Svantic. An agent is a Node.js service that exposes one or more capabilities (tools) over HTTP using the A2A protocol. Agents register with the platform on startup and receive requests routed by the Mesh.
+  </Card>
+  <Card title="Sessions" icon="messages" href="/concepts/sessions">
+    A session is a conversation thread between a user (or an automated trigger) and the platform. The Mesh creates sessions, routes messages to the appropriate agents, and tracks the full interaction history.
+  </Card>
+  <Card title="Tenants" icon="building" href="/concepts/tenants">
+    A tenant is your organization's isolated namespace on the platform. All agents, sessions, users, API keys, and usage data are scoped to a tenant. Multi-tenant isolation is enforced at every layer.
+  </Card>
+  <Card title="Telemetry" icon="chart-simple" href="/concepts/telemetry">
+    Every request produces a distributed trace using OpenTelemetry (W3C `traceparent` + `baggage`). Traces flow from agents through the Mesh and are stored for inspection in the Dashboard.
+  </Card>
+</CardGroup>
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Install the SDK, write your first agent, and connect it to the platform in under 10 minutes.
+  </Card>
+  <Card title="Authentication" icon="key" href="/authentication">
+    Learn the two auth methods — user JWT and client credentials — and how to pass tokens to the API.
+  </Card>
+  <Card title="Build an agent" icon="code" href="/guides/build-agent">
+    Step-by-step guide to defining capabilities, exposing HTTP endpoints, and registering with the Mesh.
+  </Card>
+  <Card title="Core concepts" icon="book-open" href="/concepts/agents">
+    Deeper reference on agents, sessions, tenants, and telemetry.
+  </Card>
+</CardGroup>

@@ -1,0 +1,148 @@
+---
+title: "Manage API Keys in Svantic"
+description: "Create, rotate, and revoke API keys for programmatic access to Svantic. Covers scopes, the Bearer token header, key rotation, and security best practices."
+---
+
+API keys authenticate programmatic requests to the Svantic gateway. You create keys in the dashboard and attach them to every API call your agents or applications make. Each key belongs to a tenant and carries a scope that limits what it can do.
+
+<Warning>
+The raw key value is only shown once, immediately after creation or rotation. Copy it and store it securely before closing the dialog — Svantic stores only a hashed representation and cannot recover the original value.
+</Warning>
+
+## Key scopes
+
+| Scope | What it can do |
+|---|---|
+| `full` | Read and write access to all resources for the tenant (default) |
+| `read` | Read-only access — suitable for monitoring integrations |
+| `admin` | Full access plus key management operations |
+
+Choose the narrowest scope that satisfies your use case. A monitoring dashboard needs `read`; an orchestration service that creates sessions needs `full`; a key management script needs `admin`.
+
+---
+
+## Creating an API key
+
+<Steps>
+  <Step title="Open API Keys settings">
+    In the Svantic dashboard, navigate to **Settings → API Keys**.
+  </Step>
+  <Step title="Click Create key">
+    Click **Create Key** and fill in the form:
+    - **Name** — a human-readable label so you can identify this key later (for example, `prod-orchestrator` or `ci-pipeline`).
+    - **Scope** — select `read`, `full`, or `admin`.
+    - **Tenant** — leave blank to use your current tenant, or specify a different tenant ID if you manage multiple tenants.
+  </Step>
+  <Step title="Copy the raw key">
+    After you click **Create**, the dialog shows your new `key_id` and `raw_key`. Copy the `raw_key` value immediately and store it in a secrets manager or environment variable.
+
+    ```
+    key_id:  key_01j...
+    raw_key: svk_live_...
+    ```
+  </Step>
+</Steps>
+
+<Note>
+Svantic never stores your raw key. If you lose it, you must rotate the key to get a new one.
+</Note>
+
+---
+
+## Using an API key in requests
+
+Include your API key in every request to the Svantic gateway using either the `Authorization` header or the `X-API-Key` header.
+
+<Tabs>
+  <Tab title="Authorization header">
+    ```bash
+    curl https://gateway.your-svantic-instance.com/internal/sessions \
+      -H "Authorization: Bearer svk_live_..."
+    ```
+  </Tab>
+  <Tab title="X-API-Key header">
+    ```bash
+    curl https://gateway.your-svantic-instance.com/internal/sessions \
+      -H "X-API-Key: svk_live_..."
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+Store your API key in an environment variable (for example, `SVANTIC_API_KEY`) and read it at runtime rather than hardcoding it in source files or configuration.
+</Tip>
+
+---
+
+## Rotating a key
+
+Key rotation issues a new key and revokes the old one in a single atomic operation. Use rotation on a schedule (for example, every 90 days) or immediately after a suspected compromise.
+
+<Steps>
+  <Step title="Find the key to rotate">
+    In **Settings → API Keys**, locate the key by its name or `key_id`.
+  </Step>
+  <Step title="Click Rotate">
+    Click the **Rotate** action for that key.
+  </Step>
+  <Step title="Copy the new raw key">
+    The response contains a new `key_id` and `raw_key`, and the `old_key_id` that was revoked. Copy and deploy the new key before the old one stops working.
+
+    ```json
+    {
+      "key_id": "key_02k...",
+      "raw_key": "svk_live_...",
+      "old_key_id": "key_01j..."
+    }
+    ```
+  </Step>
+  <Step title="Update your services">
+    Replace the old key value in all services and secrets vaults with the new `raw_key`. The old key is immediately invalid.
+  </Step>
+</Steps>
+
+<Warning>
+Rotation revokes the old key immediately. Update any running services that use the old key before you rotate, or schedule a brief maintenance window to avoid interruptions.
+</Warning>
+
+---
+
+## Revoking a key
+
+Revoking a key permanently invalidates it. Use revocation when decommissioning a service, offboarding a team member, or responding to a key leak.
+
+<Steps>
+  <Step title="Find the key">
+    In **Settings → API Keys**, locate the key by name or ID. You can filter to active keys only by enabling the **Active only** toggle.
+  </Step>
+  <Step title="Click Revoke">
+    Click **Revoke** and confirm the action. The key is invalidated immediately — any in-flight requests using it will return `401 Unauthorized`.
+  </Step>
+</Steps>
+
+Revoked keys remain visible in the key list (with a revoked status) for audit purposes but can no longer authenticate requests.
+
+---
+
+## Security best practices
+
+<AccordionGroup>
+  <Accordion title="Use the minimum necessary scope">
+    Assign `read` to integrations that only need to query data, and `full` only to services that create or modify resources. Reserve `admin` for key management scripts and privileged operators.
+  </Accordion>
+  <Accordion title="Store keys in a secrets manager">
+    Never commit API keys to source control or include them in container images. Use a secrets manager (such as AWS Secrets Manager, HashiCorp Vault, or your CI/CD platform's secret store) and inject keys as environment variables at runtime.
+  </Accordion>
+  <Accordion title="Rotate keys on a regular schedule">
+    Rotate production keys at least every 90 days. Use the **Rotate** action in **Settings → API Keys** or automate it via the API keys management endpoints in the Svantic Gateway.
+  </Accordion>
+  <Accordion title="Revoke keys immediately when compromised">
+    If you suspect a key has been leaked — for example, it was accidentally pushed to a public repository — revoke it immediately from the dashboard and rotate a replacement. Do not wait.
+  </Accordion>
+  <Accordion title="Create separate keys per service">
+    Use one key per service or deployment rather than sharing a single key across multiple systems. This limits the blast radius of a compromise and makes it easy to rotate or revoke access for a specific service without affecting others.
+  </Accordion>
+  <Accordion title="Audit the key list regularly">
+    Review your active keys periodically. Revoke any keys that belong to decommissioned services or former team members.
+  </Accordion>
+</AccordionGroup>

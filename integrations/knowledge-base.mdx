@@ -1,0 +1,367 @@
+---
+title: "Add Knowledge Bases to Your Svantic Agents"
+description: "Create vector-search knowledge bases in Svantic, ingest documents, and let your agents retrieve relevant context automatically using natural language queries."
+---
+
+Svantic's knowledge base system, powered by the Cortex service, lets you store documents as vector embeddings and retrieve the most relevant passages at query time. When an agent needs context — product documentation, runbooks, historical tickets, internal wikis — it queries the knowledge base with natural language and receives semantically matched results ranked by relevance. This page explains how to create a knowledge base, ingest content into it, query it, and how agents use it automatically.
+
+## How it works
+
+Every knowledge base lives inside a **namespace** — a unique identifier scoped to your tenant. When you ingest a document, Cortex splits it into chunks using a configurable strategy (markdown sections, paragraphs, or sentences), generates a vector embedding for each chunk using Google's embedding model, and stores both the text and the vector. At query time, Cortex embeds your query text and runs a vector similarity search to find the closest matching chunks.
+
+Agents interact with knowledge bases through the Svantic Mesh. When an agent session determines it needs factual context, the Mesh routes a knowledge query to Cortex and injects the results into the agent's context window before it generates a response.
+
+## Creating a knowledge base
+
+Before ingesting any content, you must create a knowledge base and choose a namespace.
+
+<Steps>
+  <Step title="Choose a namespace">
+    A namespace is a lowercase alphanumeric identifier with optional hyphens and underscores (for example, `engineering-docs` or `support_runbooks`). It must be unique within your tenant. You will use this namespace in every subsequent API call.
+  </Step>
+  <Step title="Call the create endpoint">
+    Send a `POST` request to `/kb/create` with a `namespace` and `display_name` at minimum.
+
+    ```bash
+    curl -X POST https://<your-svantic-host>/kb/create \
+      -H "Authorization: Bearer <your-token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "namespace": "engineering-docs",
+        "display_name": "Engineering Documentation",
+        "description": "Internal runbooks, architecture docs, and ADRs."
+      }'
+    ```
+
+    A successful response returns the knowledge base record:
+
+    ```json
+    {
+      "ok": true,
+      "knowledge_base": {
+        "namespace": "engineering-docs",
+        "display_name": "Engineering Documentation",
+        "description": "Internal runbooks, architecture docs, and ADRs.",
+        "visibility": "private",
+        "config": {
+          "default_top_k": 5,
+          "min_relevance_score": 0.7,
+          "embedding_model": "gemini-embedding-001",
+          "chunk_strategy": "markdown"
+        },
+        "boost_rules": [],
+        "created_at": "2026-04-10T12:00:00.000Z",
+        "updated_at": "2026-04-10T12:00:00.000Z"
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+### Retrieval configuration
+
+You can pass a `config` object to tune how retrieval works for this knowledge base:
+
+| Field                 | Type     | Default               | Description                                                              |
+| --------------------- | -------- | --------------------- | ------------------------------------------------------------------------ |
+| `default_top_k`       | integer  | `5`                   | Number of chunks returned per query (1–100).                             |
+| `min_relevance_score` | float    | `0.7`                 | Minimum cosine similarity score to include a result (0–1).               |
+| `embedding_model`     | string   | `gemini-embedding-001`| Embedding model identifier.                                              |
+| `chunk_strategy`      | string   | `markdown`            | How documents are split: `markdown`, `paragraph`, `sentence`, or `custom`.|
+
+```json
+{
+  "namespace": "support-tickets",
+  "display_name": "Support Ticket Archive",
+  "config": {
+    "default_top_k": 10,
+    "min_relevance_score": 0.65,
+    "chunk_strategy": "paragraph"
+  }
+}
+```
+
+## Ingesting documents
+
+Once your knowledge base exists, you can ingest documents into it. Each call to `/knowledge/ingest` replaces any previously ingested content for the same `source_id` (re-ingest is idempotent).
+
+```bash
+curl -X POST https://<your-svantic-host>/knowledge/ingest \
+  -H "Authorization: Bearer <your-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "namespace": "engineering-docs",
+    "source_id": "runbooks/deployment.md",
+    "source_type": "file",
+    "content": "## Deployment runbook\n\nThis document describes the steps to deploy the backend service...",
+    "tags": ["runbook", "deployment"]
+  }'
+```
+
+A successful response:
+
+```json
+{
+  "ok": true,
+  "source_id": "runbooks/deployment.md",
+  "chunks_created": 8
+}
+```
+
+### Ingest request fields
+
+| Field         | Type     | Required | Description                                                                                          |
+| ------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `namespace`   | `string` | Yes      | The knowledge base namespace to ingest into.                                                         |
+| `source_id`   | `string` | Yes      | A unique identifier for this document (e.g. a file path, URL, or UUID).                              |
+| `source_type` | `string` | No       | `file`, `api`, `manual`, or `learning`. Defaults to `file`.                                          |
+| `content`     | `string` | Yes      | The full document text to chunk and embed.                                                           |
+| `tags`        | `array`  | Yes      | At least one tag. Tags enable filtered and boosted retrieval.                                        |
+| `metadata`    | `object` | No       | Arbitrary key-value metadata stored alongside each chunk.                                            |
+
+### Appending incremental content
+
+For learning-style content where you want to add new chunks without replacing an existing source, use `/knowledge/append`:
+
+```bash
+curl -X POST https://<your-svantic-host>/knowledge/append \
+  -H "Authorization: Bearer <your-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "namespace": "engineering-docs",
+    "content": "Note: the deploy pipeline now requires a JIRA ticket number in the PR description.",
+    "tags": ["runbook", "deployment", "update"]
+  }'
+```
+
+Appended chunks are immediately searchable. They are stored with `source_type: "learning"` and a default `source_id` of `"learnings"` unless you provide one.
+
+## Querying a knowledge base
+
+You can query any knowledge base directly using natural language. Cortex embeds your query, runs a vector similarity search, and returns the top matching chunks sorted by score.
+
+```bash
+curl -X POST https://<your-svantic-host>/knowledge/query \
+  -H "Authorization: Bearer <your-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "namespace": "engineering-docs",
+    "query": "How do I roll back a failed deployment?",
+    "top_k": 5
+  }'
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "results": [
+    {
+      "text": "## Rollback procedure\n\nTo roll back, run `kubectl rollout undo deployment/backend`...",
+      "source_id": "runbooks/deployment.md",
+      "tags": ["runbook", "deployment"],
+      "score": 0.94
+    },
+    {
+      "text": "If the rollback fails, escalate to the on-call engineer and open a P1 ticket...",
+      "source_id": "runbooks/deployment.md",
+      "tags": ["runbook", "deployment"],
+      "score": 0.87
+    }
+  ],
+  "total_candidates": 12
+}
+```
+
+### Query request fields
+
+| Field         | Type       | Required | Description                                                                                     |
+| ------------- | ---------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `namespace`   | `string`   | Yes      | The knowledge base to query.                                                                    |
+| `query`       | `string`   | Yes      | Natural language query text.                                                                    |
+| `top_k`       | `integer`  | No       | Number of results to return. Overrides the KB's `default_top_k` (1–100).                       |
+| `boost_tag`   | `string`   | No       | Tag to prioritize in results. Chunks matching this tag get reserved slots in the result set.    |
+| `filter_tags` | `string[]` | No       | Only return chunks that have at least one of these tags.                                        |
+
+### Tag boosting
+
+If you have content that should always appear in results when relevant — for example, site-specific runbooks versus general documentation — you can use `boost_tag` to reserve result slots for that content. When you specify a `boost_tag`, Cortex runs two parallel searches: one scoped to chunks with the boost tag, and one general. It then merges both result sets, guaranteeing that boosted content is represented.
+
+Configure the number of reserved slots on the knowledge base with a `boost_rules` entry:
+
+```json
+{
+  "namespace": "engineering-docs",
+  "boost_rules": [
+    {
+      "tag_prefix": "site:",
+      "reserved_slots": 3,
+      "description": "Reserve 3 slots for site-specific documentation"
+    }
+  ]
+}
+```
+
+## Managing sources
+
+Every document you ingest is tracked as a **source**. You can list all sources in a knowledge base, check when they were last embedded, and delete individual sources without affecting others.
+
+<Tabs>
+  <Tab title="List sources">
+    ```bash
+    curl -X POST https://<your-svantic-host>/knowledge/list-sources \
+      -H "Authorization: Bearer <your-token>" \
+      -H "Content-Type: application/json" \
+      -d '{ "namespace": "engineering-docs" }'
+    ```
+
+    ```json
+    {
+      "ok": true,
+      "count": 3,
+      "sources": [
+        {
+          "source_id": "runbooks/deployment.md",
+          "source_type": "file",
+          "chunk_count": 8,
+          "last_embedded_at": "2026-04-10T12:00:00.000Z"
+        }
+      ]
+    }
+    ```
+  </Tab>
+  <Tab title="Delete a source">
+    Deletes a source and all its chunks from the knowledge base. Other sources are not affected.
+
+    ```bash
+    curl -X POST https://<your-svantic-host>/knowledge/delete-source \
+      -H "Authorization: Bearer <your-token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "namespace": "engineering-docs",
+        "source_id": "runbooks/old-runbook.md"
+      }'
+    ```
+
+    ```json
+    {
+      "ok": true,
+      "chunks_deleted": 5,
+      "source_deleted": true
+    }
+    ```
+  </Tab>
+  <Tab title="Get stats">
+    Returns the total chunk count and source count for a knowledge base.
+
+    ```bash
+    curl -X POST https://<your-svantic-host>/knowledge/stats \
+      -H "Authorization: Bearer <your-token>" \
+      -H "Content-Type: application/json" \
+      -d '{ "namespace": "engineering-docs" }'
+    ```
+
+    ```json
+    {
+      "ok": true,
+      "namespace": "engineering-docs",
+      "chunk_count": 104,
+      "source_count": 12,
+      "last_updated": "2026-04-10T14:30:00.000Z"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Re-embedding after model changes
+
+If you update the embedding model or chunk strategy in your knowledge base config, existing chunks are stale and will not produce accurate similarity scores. Use `/knowledge/re-embed` to clear all chunks and prepare for re-ingestion:
+
+```bash
+curl -X POST https://<your-svantic-host>/knowledge/re-embed \
+  -H "Authorization: Bearer <your-token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "namespace": "engineering-docs" }'
+```
+
+<Warning>
+`re-embed` deletes all existing chunks in the namespace. After calling it, you must re-ingest all sources. Your agents will return empty results until re-ingestion is complete.
+</Warning>
+
+## Managing knowledge bases
+
+### List knowledge bases
+
+```bash
+curl -X POST https://<your-svantic-host>/kb/list \
+  -H "Authorization: Bearer <your-token>" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+### Get a single knowledge base
+
+```bash
+curl -X POST https://<your-svantic-host>/kb/get \
+  -H "Authorization: Bearer <your-token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "namespace": "engineering-docs" }'
+```
+
+### Update a knowledge base
+
+You can update the `display_name`, `description`, `config`, and `boost_rules` of an existing knowledge base without deleting it. Changes to `config` only affect newly ingested content unless you also re-embed.
+
+```bash
+curl -X POST https://<your-svantic-host>/kb/update \
+  -H "Authorization: Bearer <your-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "namespace": "engineering-docs",
+    "description": "Updated: includes on-call playbooks.",
+    "config": {
+      "default_top_k": 8
+    }
+  }'
+```
+
+### Delete a knowledge base
+
+Deletes the knowledge base record and all of its chunks and sources. This action is irreversible.
+
+```bash
+curl -X POST https://<your-svantic-host>/kb/delete \
+  -H "Authorization: Bearer <your-token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "namespace": "engineering-docs" }'
+```
+
+## How agents use knowledge bases
+
+You do not need to wire up knowledge queries in your agent code. When an agent session is running and the Mesh determines that a knowledge lookup would help answer a question or complete a task, it automatically routes a semantic query to Cortex and injects the top results into the agent's context.
+
+To associate a knowledge base with an agent, specify the namespace in the agent's configuration in the Svantic dashboard under **Agents → Knowledge**. You can attach multiple namespaces to a single agent.
+
+<Note>
+Queries from agents always run against the namespaces you have assigned in the dashboard. An agent cannot query a knowledge base it has not been given access to.
+</Note>
+
+## API surface summary
+
+All endpoints below are accessed through the Gateway. The Cortex service is not exposed directly — the Gateway handles authentication and proxying.
+
+| Endpoint                                     | Description                                         |
+| -------------------------------------------- | --------------------------------------------------- |
+| `POST /kb/create`                            | Create a new knowledge base                         |
+| `POST /kb/list`                              | List all knowledge bases for your tenant            |
+| `POST /kb/get`                               | Get a knowledge base by namespace                   |
+| `POST /kb/update`                            | Update display name, description, config, or rules  |
+| `POST /kb/delete`                            | Delete a knowledge base and all its data            |
+| `POST /knowledge/ingest`                     | Ingest (or re-ingest) a document                    |
+| `POST /knowledge/append`                     | Append incremental content without replacing source |
+| `POST /knowledge/query`                      | Semantic search against a knowledge base            |
+| `POST /knowledge/list-sources`               | List all ingested sources                           |
+| `POST /knowledge/delete-source`              | Delete a source and its chunks                      |
+| `POST /knowledge/re-embed`                   | Clear chunks to prepare for re-ingestion            |
+| `POST /knowledge/stats`                      | Get chunk and source counts                         |

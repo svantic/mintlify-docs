@@ -1,0 +1,168 @@
+---
+title: "Get Started with Svantic in 10 Minutes"
+description: "Install @svantic/sdk, define a capability, expose your agent over HTTP, and connect it to the Svantic Mesh — all in under 10 minutes."
+---
+
+This guide walks you through building a working Svantic agent from scratch. You'll install the SDK, define a capability, expose it over HTTP, and connect it to the Svantic Mesh. By the end you'll have a running agent that the platform can route requests to.
+
+<Note>
+  You need Node.js 20 or later, npm 10 or later, and a Svantic account with a tenant ID and tenant secret. If you don't have credentials yet, see [Authentication](/authentication).
+</Note>
+
+## Install the SDK
+
+<Steps>
+
+<Step title="Install @svantic/sdk">
+
+The SDK is the only package you need to build an agent. It includes the `Agent` class, capability definition helpers, and the `MeshConnector` for platform registration.
+
+```bash
+npm install @svantic/sdk
+```
+
+You'll also need Express to expose your agent's HTTP endpoints:
+
+```bash
+npm install express
+npm install --save-dev @types/express
+```
+
+</Step>
+
+<Step title="Create your agent file">
+
+Create a file called `agent.ts`. The example below builds an inventory agent with a single `check_stock` capability — a realistic pattern you can adapt to any domain.
+
+```typescript agent.ts
+import express from 'express';
+import { Agent } from '@svantic/sdk';
+import { MeshConnector } from '@svantic/sdk/mesh';
+
+const app = express();
+
+// 1. Define your agent
+const agent = new Agent({
+  name: 'inventory',
+  description: 'Check product stock levels',
+  url: 'http://localhost:4000',
+});
+
+// 2. Define a capability (tool)
+agent.define_capability({
+  name: 'check_stock',
+  description: 'Check current stock for a product',
+  parameters: {
+    type: 'object',
+    properties: {
+      product_id: { type: 'string', description: 'SKU' },
+    },
+    required: ['product_id'],
+  },
+  handler: async (args) => {
+    // Replace this with a real database call
+    return { product_id: args.product_id, available: 42 };
+  },
+});
+
+// 3. Mount A2A endpoints on the Express app
+agent.expose(app);
+app.listen(4000);
+
+// 4. Connect to the Svantic Mesh
+const mesh = new MeshConnector(agent, {
+  gateway_url: 'https://gateway.your-svantic-instance.com',
+  mesh_url: 'https://mesh.your-svantic-instance.com',
+  client_id: 'your-tenant-id',
+  client_secret: 'your-tenant-secret',
+});
+
+await mesh.connect();
+
+console.log('Agent connected to Svantic Mesh');
+```
+
+</Step>
+
+<Step title="Run your agent">
+
+```bash
+npx tsx agent.ts
+```
+
+You should see `Agent connected to Svantic Mesh` in your terminal. Your agent is now registered, and the platform can route requests to it.
+
+</Step>
+
+</Steps>
+
+## What just happened
+
+When you called `mesh.connect()`, the SDK performed three steps automatically:
+
+1. **Registered** the agent with the Gateway — persisting its name, URL, and capabilities to the database.
+2. **Exchanged credentials** with the Mesh to receive a JWT for session operations.
+3. **Started a heartbeat** that keeps the registration alive every five minutes.
+
+The `agent.expose(app)` call mounted the A2A-compliant HTTP endpoints on your Express app so the Mesh can invoke your `check_stock` capability when a session routes to it.
+
+## Understanding the code
+
+### `Agent` constructor
+
+The `Agent` class takes a configuration object. The fields you set here become part of the agent's registration on the platform.
+
+| Field | Description |
+|---|---|
+| `name` | Human-readable name shown in the Dashboard. |
+| `description` | Used by the Mesh to route requests to this agent. Write it clearly — the router reads it. |
+| `url` | The publicly reachable URL for this agent. The Mesh sends requests here. |
+
+### `define_capability`
+
+Each capability is a typed tool with a JSON Schema `parameters` block and an async `handler`. The Mesh calls `handler` with the resolved arguments when a user asks a question that maps to this capability.
+
+### `MeshConnector` config
+
+<CodeGroup>
+
+```typescript Updated MeshConnectorConfig
+const mesh = new MeshConnector(agent, {
+  gateway_url: 'https://gateway.your-svantic-instance.com', // Gateway for registration
+  mesh_url: 'https://mesh.your-svantic-instance.com',       // Mesh for session operations
+  client_id: 'your-tenant-id',                             // Your tenant ID
+  client_secret: 'your-tenant-secret',                     // Your tenant secret
+  retries: 3,                                              // Optional: retry attempts (default 3)
+  retry_delay_ms: 2000,                                    // Optional: delay between retries (default 2000)
+});
+```
+
+</CodeGroup>
+
+## Clean up on shutdown
+
+Call `mesh.disconnect()` when your process shuts down. This deregisters the agent from the Gateway so it no longer appears as available.
+
+```typescript
+process.on('SIGTERM', async () => {
+  await mesh.disconnect();
+  process.exit(0);
+});
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Capabilities in depth" icon="bolt" href="/guides/capabilities">
+    Learn how to define richer capability schemas, handle errors, and stream responses.
+  </Card>
+  <Card title="Connect to the Mesh" icon="diagram-project" href="/guides/connect-mesh">
+    Production deployment patterns: environment variables, retries, and health checks.
+  </Card>
+  <Card title="Built-in tools" icon="screwdriver-wrench" href="/integrations/builtin-tools">
+    Add pre-built GitHub, Jira, Slack, and Datadog integrations to your agent in minutes.
+  </Card>
+  <Card title="MCP tools" icon="plug" href="/guides/mcp-tools">
+    Expose any MCP server as an A2A capability using the built-in MCP bridge.
+  </Card>
+</CardGroup>

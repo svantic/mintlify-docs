@@ -1,0 +1,220 @@
+---
+title: "Connect MCP Tool Servers to a Svantic Agent"
+description: "Use agent.register_mcp() to discover tools from any MCP-compatible server and expose them as A2A capabilities — no handler code required."
+---
+
+The Model Context Protocol (MCP) is an open standard for tool servers. An MCP server exposes a set of tools with defined input schemas and handles invocations over a standard interface. Svantic agents can connect to any MCP-compatible server, discover its tools automatically, and register each one as a first-class A2A capability — without you needing to write individual handler functions.
+
+## How it works
+
+When you call `agent.register_mcp()`, the SDK:
+
+1. Spawns the MCP server as a child process using the command you provide
+2. Performs the MCP initialization handshake over stdio
+3. Queries the server's tool list
+4. Wraps each tool as an A2A capability with the tool's name, description, and input schema
+5. Registers the capabilities on your agent
+
+The wrapped capabilities appear in the agent card, are invocable via A2A, and are automatically cleaned up when you call `agent.close()`.
+
+<Note>
+  You must call `agent.register_mcp()` **before** `agent.expose(app)`. The agent card is built at expose time — tools registered after that point will not appear in the card.
+</Note>
+
+## McpServerSpawnConfig fields
+
+<ParamField path="command" type="string" required>
+  The executable to run (for example `npx`, `node`, or a full path to a binary).
+</ParamField>
+
+<ParamField path="args" type="string[]">
+  Command-line arguments to pass to the MCP server process.
+</ParamField>
+
+<ParamField path="env" type="Record<string, string>">
+  Additional environment variables to set for the MCP server process. These are merged with the current process environment.
+</ParamField>
+
+## Register your first MCP server
+
+This example registers the `@modelcontextprotocol/server-filesystem` MCP server, which exposes tools for reading and writing files.
+
+```typescript agent.ts
+import express from 'express';
+import { Agent } from '@svantic/sdk';
+
+const app = express();
+
+const agent = new Agent({
+  name: 'file-agent',
+  description: 'Read and write files using MCP filesystem tools',
+  url: 'http://localhost:4000',
+});
+
+// Register the MCP server BEFORE agent.expose()
+const registered = await agent.register_mcp(
+  'filesystem',
+  {
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp/workspace'],
+  },
+);
+
+console.log('Registered capabilities:', registered);
+// e.g. ['filesystem_read_file', 'filesystem_write_file', 'filesystem_list_directory']
+
+agent.expose(app);
+app.listen(4000);
+```
+
+## Capability naming
+
+By default, each registered capability is named `{server_name}_{tool_name}`. Hyphens in `server_name` are converted to underscores. For example, if your server is named `chrome-devtools` and the tool is `screenshot`, the registered capability name is `chrome_devtools_screenshot`.
+
+You can override the prefix with the `tool_prefix` option:
+
+```typescript
+const registered = await agent.register_mcp(
+  'chrome-devtools',
+  {
+    command: 'npx',
+    args: ['chrome-devtools-mcp@latest'],
+  },
+  { tool_prefix: 'browser' },
+);
+// Capabilities are named: browser_screenshot, browser_navigate, etc.
+```
+
+## Return value
+
+`register_mcp()` returns a `Promise<string[]>` — the list of capability names that were registered. Use this to confirm which tools were discovered.
+
+```typescript
+const registered = await agent.register_mcp('filesystem', {
+  command: 'npx',
+  args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp/workspace'],
+});
+
+console.log(`Registered ${registered.length} capabilities:`);
+registered.forEach(name => console.log(` - ${name}`));
+```
+
+## Passing environment variables
+
+Some MCP servers require API keys or configuration through environment variables. Pass them in the `env` field — they are merged with the current process environment so the server process inherits everything it needs.
+
+```typescript
+await agent.register_mcp(
+  'github',
+  {
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-github'],
+    env: {
+      GITHUB_PERSONAL_ACCESS_TOKEN: process.env.GITHUB_TOKEN!,
+    },
+  },
+);
+```
+
+## Registering multiple MCP servers
+
+You can register as many MCP servers as your agent needs. Each gets its own child process and its own set of capabilities.
+
+```typescript agent.ts
+import express from 'express';
+import { Agent } from '@svantic/sdk';
+
+const app = express();
+
+const agent = new Agent({
+  name: 'dev-assistant',
+  description: 'Development assistant with file and browser access',
+  url: 'http://localhost:4000',
+});
+
+// Register filesystem tools
+await agent.register_mcp('filesystem', {
+  command: 'npx',
+  args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp/workspace'],
+});
+
+// Register browser automation tools
+await agent.register_mcp(
+  'chrome-devtools',
+  {
+    command: 'npx',
+    args: ['chrome-devtools-mcp@latest'],
+  },
+  { tool_prefix: 'browser' },
+);
+
+agent.expose(app);
+app.listen(4000, () => {
+  console.log('Dev assistant running on http://localhost:4000');
+});
+```
+
+## Tags
+
+Capabilities registered from an MCP server are automatically tagged with `['mcp', server_name]`. These tags appear in the agent card and the Svantic dashboard.
+
+For example, tools from a server named `filesystem` are tagged `['mcp', 'filesystem']`. This lets you quickly identify which capabilities came from MCP servers.
+
+## Cleanup
+
+When your process shuts down, call `agent.close()` to kill the MCP server child processes cleanly.
+
+```typescript
+process.on('SIGTERM', async () => {
+  await agent.close(); // Kills all MCP server child processes
+  server.close();
+});
+```
+
+<Warning>
+  If you do not call `agent.close()`, the MCP server child processes may keep running after your agent exits. Always register a shutdown handler in production.
+</Warning>
+
+## Complete example
+
+```typescript agent.ts
+import express from 'express';
+import { Agent } from '@svantic/sdk';
+
+const app = express();
+
+const agent = new Agent({
+  name: 'file-agent',
+  description: 'Read and write files using MCP filesystem tools',
+  url: 'http://localhost:4000',
+});
+
+const registered = await agent.register_mcp('filesystem', {
+  command: 'npx',
+  args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp/workspace'],
+});
+
+console.log(`Registered ${registered.length} MCP capabilities`);
+
+agent.expose(app);
+
+const server = app.listen(4000, () => {
+  console.log('File agent running on http://localhost:4000');
+});
+
+process.on('SIGTERM', async () => {
+  await agent.close();
+  server.close();
+});
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Define capabilities manually" icon="function" href="/guides/capabilities">
+    Write custom capability handlers alongside your MCP tools.
+  </Card>
+  <Card title="Connect to the Mesh" icon="network-wired" href="/guides/connect-mesh">
+    Register your agent with Svantic and start receiving orchestrated requests.
+  </Card>
+</CardGroup>

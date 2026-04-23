@@ -1,0 +1,220 @@
+---
+title: "Build Your First Svantic Agent with the SDK"
+description: "Install @svantic/sdk, configure an Agent, define capabilities, and expose A2A endpoints on Express — ready to receive requests from the Svantic Mesh."
+---
+
+The `@svantic/sdk` package turns any Node.js Express application into an A2A-compliant agent. You define what your agent can do through capabilities, expose two HTTP endpoints with a single call, and optionally connect to the Svantic Mesh for orchestration. This page walks you through creating a working agent from scratch.
+
+## Prerequisites
+
+- Node.js 20 or later
+- An Express application (or a new one you create below)
+- Your Svantic `client_id` and `client_secret` from the dashboard
+
+## Install the SDK
+
+<Steps>
+  <Step title="Install the package">
+    Add `@svantic/sdk` and `express` to your project.
+
+    <CodeGroup>
+
+    ```bash npm
+    npm install @svantic/sdk express
+    ```
+
+    ```bash yarn
+    yarn add @svantic/sdk express
+    ```
+
+    ```bash pnpm
+    pnpm add @svantic/sdk express
+    ```
+
+    </CodeGroup>
+  </Step>
+
+  <Step title="Create your agent file">
+    Create a new file — for example `agent.ts` — and import `Agent` from the SDK.
+
+    ```typescript agent.ts
+    import express from 'express';
+    import { Agent } from '@svantic/sdk';
+    ```
+  </Step>
+
+  <Step title="Configure the agent">
+    Instantiate `Agent` with an `AgentConfig` object. At minimum you need `name`, `description`, and `url`.
+
+    ```typescript agent.ts
+    const app = express();
+
+    const agent = new Agent({
+      name: 'inventory',
+      description: 'Check and update product stock levels',
+      url: 'http://localhost:4000',
+      version: '1.0.0',
+      agent_type: 'inventory',
+    });
+    ```
+
+    <Note>
+      `url` must be the externally reachable base URL where this agent will be running — the Svantic Mesh uses it to route requests. Do not include a trailing slash.
+    </Note>
+  </Step>
+
+  <Step title="Define a capability">
+    A capability is a named function your agent exposes. The Mesh discovers capabilities through the agent card and invokes them by name. Add one with `define_capability`.
+
+    ```typescript agent.ts
+    agent.define_capability({
+      name: 'check_stock',
+      description: 'Return the current stock level for a product SKU',
+      parameters: {
+        type: 'object',
+        properties: {
+          product_id: {
+            type: 'string',
+            description: 'The product SKU to look up',
+          },
+        },
+        required: ['product_id'],
+      },
+      handler: async (args) => {
+        // Replace with your real data source
+        return { product_id: args.product_id, available: 42 };
+      },
+    });
+    ```
+  </Step>
+
+  <Step title="Expose the A2A endpoints">
+    Call `agent.expose(app)` to mount the two A2A routes on your Express app.
+
+    ```typescript agent.ts
+    agent.expose(app);
+    ```
+
+    This registers two routes:
+
+    | Route | Purpose |
+    |---|---|
+    | `GET /.well-known/agent-card.json` | Agent discovery — returns the agent card with all capabilities |
+    | `POST /ask` | JSON-RPC 2.0 endpoint — receives and executes capability invocations |
+  </Step>
+
+  <Step title="Start the server">
+    Start listening and handle clean shutdown.
+
+    ```typescript agent.ts
+    const server = app.listen(4000, () => {
+      console.log('Inventory agent running on http://localhost:4000');
+    });
+
+    process.on('SIGTERM', async () => {
+      await agent.close();
+      server.close();
+    });
+    ```
+  </Step>
+</Steps>
+
+## Complete example
+
+Here is the full inventory agent in one file, matching the structure above.
+
+```typescript agent.ts
+import express from 'express';
+import { Agent } from '@svantic/sdk';
+
+const app = express();
+
+const agent = new Agent({
+  name: 'inventory',
+  description: 'Check and update product stock levels',
+  url: 'http://localhost:4000',
+  version: '1.0.0',
+  agent_type: 'inventory',
+});
+
+agent.define_capability({
+  name: 'check_stock',
+  description: 'Return the current stock level for a product SKU',
+  parameters: {
+    type: 'object',
+    properties: {
+      product_id: {
+        type: 'string',
+        description: 'The product SKU to look up',
+      },
+    },
+    required: ['product_id'],
+  },
+  handler: async (args) => {
+    return { product_id: args.product_id, available: 42 };
+  },
+});
+
+agent.expose(app);
+
+const server = app.listen(4000, () => {
+  console.log('Inventory agent running on http://localhost:4000');
+});
+
+process.on('SIGTERM', async () => {
+  await agent.close();
+  server.close();
+});
+```
+
+Run it with:
+
+```bash
+npx tsx agent.ts
+```
+
+Visit `http://localhost:4000/.well-known/agent-card.json` to confirm the agent card is served correctly. You should see the agent name, description, and the `check_stock` capability.
+
+## AgentConfig fields
+
+<ParamField path="name" type="string" required>
+  Display name for the agent, shown in the dashboard and agent card.
+</ParamField>
+
+<ParamField path="description" type="string" required>
+  Human-readable description of what this agent does. Shown to orchestrators and the LLM when routing requests.
+</ParamField>
+
+<ParamField path="url" type="string" required>
+  Base URL where this agent is reachable (for example `http://localhost:4000` or `https://inventory.internal`). Do not include a trailing slash.
+</ParamField>
+
+<ParamField path="version" type="string" default="1.0.0">
+  Version string included in the agent card. Use semantic versioning.
+</ParamField>
+
+<ParamField path="agent_type" type="string">
+  Logical agent type for Mesh routing. All running instances of the same service should share this value. Defaults to `name` if omitted.
+</ParamField>
+
+<ParamField path="instance_id" type="string">
+  Unique identifier for this specific running instance. Defaults to `{hostname}-{port}` derived from `url`. You can also set the `SAVANT_INSTANCE_ID` environment variable to control this in containerized environments.
+</ParamField>
+
+<Tip>
+  In Kubernetes or Docker, set `SAVANT_INSTANCE_ID` to the pod or container name. The SDK reads this environment variable automatically and uses it as the `instance_id`.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Define capabilities" icon="function" href="/guides/capabilities">
+    Add multiple capabilities with typed parameters and complex handlers.
+  </Card>
+  <Card title="Connect MCP tool servers" icon="plug" href="/guides/mcp-tools">
+    Wrap any MCP-compatible tool server as A2A capabilities automatically.
+  </Card>
+  <Card title="Connect to the Mesh" icon="network-wired" href="/guides/connect-mesh">
+    Register your agent with Svantic for orchestration and observability.
+  </Card>
+</CardGroup>

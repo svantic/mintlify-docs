@@ -1,0 +1,129 @@
+---
+title: "Svantic CLI: Manage Your Platform from the Terminal"
+description: "Install @svantic/cli to check gateway and mesh health, inspect tenants, agents, and sessions, and view your resolved configuration from the terminal."
+---
+
+The Svantic CLI gives you a scriptable interface for operating the Svantic platform. You can check the health of the gateway and mesh, list and inspect tenants, browse registered agents, review recent sessions, and diagnose connectivity problems — all without leaving the terminal. The CLI reads configuration from environment variables and an optional config file, making it straightforward to integrate into CI/CD pipelines.
+
+## Installation
+
+<Tabs>
+
+<Tab title="Global install">
+
+```bash
+npm install -g @svantic/cli
+```
+
+After installation, the `svantic` binary is available in your shell:
+
+```bash
+svantic --version
+```
+
+</Tab>
+
+<Tab title="npx (no install)">
+
+Run any command without installing globally:
+
+```bash
+npx @svantic/cli status
+```
+
+</Tab>
+
+</Tabs>
+
+## Configuration
+
+The CLI resolves its configuration in the following order of precedence for each setting:
+
+1. Environment variable
+2. Config file (`~/.svantic/config.json`)
+3. Built-in default (gateway URL only: `http://localhost:7000`)
+
+### Environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `SVANTIC_GATEWAY_URL` | Base URL of the Svantic Gateway (e.g. `https://gateway.example.com`) |
+| `SVANTIC_TOKEN` | Bearer token sent as `Authorization: Bearer <token>` on every request |
+
+```bash
+export SVANTIC_GATEWAY_URL=https://gateway.example.com
+export SVANTIC_TOKEN=my-api-token
+svantic status
+```
+
+### Config file
+
+Create `~/.svantic/config.json` to persist settings across sessions:
+
+```json
+{
+    "gateway_url": "https://gateway.example.com",
+    "token": "my-api-token"
+}
+```
+
+Environment variables always take precedence over values in the config file.
+
+### Verify your configuration
+
+Use `svantic config show` to see exactly what the CLI has resolved:
+
+```
+Svantic CLI Configuration:
+
+  Gateway URL:    https://gateway.example.com
+  Token:          ••••my-token
+  Config file:    /home/user/.svantic/config.json (found)
+  Env overrides:
+    SVANTIC_GATEWAY_URL = https://gateway.example.com
+    SVANTIC_TOKEN       = (set)
+```
+
+The token is redacted in output — only the last 8 characters are shown.
+
+## Quick start
+
+The following checks that your gateway is reachable and the mesh is connected:
+
+```bash
+# Set credentials
+export SVANTIC_GATEWAY_URL=https://gateway.example.com
+export SVANTIC_TOKEN=your-token
+
+# Check health
+svantic status
+```
+
+Expected output when everything is healthy:
+
+```
+Checking https://gateway.example.com …
+
+  Gateway:        ✔ healthy
+  Service:        svantic-gateway
+  Version:        0.1.0
+  Uptime:         3842s
+  Mesh connected: yes
+```
+
+## Command groups
+
+| Group | Description |
+|-------|-------------|
+| `svantic status` | Show gateway and mesh health |
+| `svantic tenants` | List and inspect tenants |
+| `svantic agents` | List registered agents |
+| `svantic sessions` | List recent sessions |
+| `svantic config` | View resolved CLI configuration |
+| `svantic version` (or `-v`) | Show CLI version |
+
+See the [Command Reference](/cli/commands) for flags, arguments, and example output for every command.
+
+<Note>
+  The CLI communicates with the Svantic Gateway's internal API endpoints (`/internal/...`). Ensure your `SVANTIC_TOKEN` has the required permissions for the operations you want to run.
+</Note>

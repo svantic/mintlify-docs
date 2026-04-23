@@ -1,0 +1,154 @@
+---
+title: "Authenticate with Svantic API and SDK"
+description: "Learn the two Svantic auth methods — user JWT for dashboard access and client credentials for machine-to-machine agent auth — and how to use API keys."
+---
+
+Svantic uses JWT-based authentication for all API access. There are two distinct auth flows depending on who is making the request: human users authenticating through the Dashboard, and agents or services authenticating programmatically. This page covers both flows and explains how to manage API keys for long-lived automation.
+
+## Auth methods
+
+### User authentication (email + password)
+
+Human users — including anyone signing in to the Dashboard or calling the API directly — authenticate with their email and password. A successful login returns a signed JWT.
+
+**Endpoint:** `POST /auth/login`
+
+```bash
+curl -X POST https://gateway.your-svantic-instance.com/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "your-password"}'
+```
+
+**Response:**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+Use the returned `token` in the `Authorization` header for all subsequent requests:
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  https://gateway.your-svantic-instance.com/internal/sessions
+```
+
+### Client credentials (machine-to-machine)
+
+Agents and automated services authenticate using a `client_id` and `client_secret` — your tenant ID and tenant secret. This is the method used by `MeshConnector` internally, and the one you use when calling the API from a non-human context.
+
+**Endpoint:** `POST /auth/get_token`
+
+```bash
+curl -X POST https://gateway.your-svantic-instance.com/auth/get_token \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_id": "your-tenant-id",
+    "client_secret": "your-tenant-secret",
+    "agent_type": "custom"
+  }'
+```
+
+**Request body fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `client_id` | string | Yes | Your tenant ID. |
+| `client_secret` | string | Yes | Your tenant secret. |
+| `agent_type` | string | Yes | A label for the agent type (e.g. `"custom"`, `"inventory"`). |
+| `expires_in` | number | No | Token lifetime in seconds. Defaults to platform setting. |
+
+**Response:**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+#### Using the SDK instead of raw HTTP
+
+When you use `MeshConnector`, the SDK handles credential exchange automatically — you don't call `POST /auth/get_token` directly.
+
+```typescript
+import { MeshConnector } from '@svantic/sdk/mesh';
+
+const mesh = new MeshConnector(agent, {
+  gateway_url: 'https://gateway.your-svantic-instance.com',
+  mesh_url: 'https://mesh.your-svantic-instance.com',
+  client_id: 'your-tenant-id',
+  client_secret: 'your-tenant-secret',
+});
+
+await mesh.connect(); // handles token exchange internally
+```
+
+## Passing tokens to the API
+
+All authenticated endpoints expect a Bearer token in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+<Warning>
+  Never include your `client_secret` or user password in client-side code or version control. Use environment variables or a secrets manager to inject credentials at runtime.
+</Warning>
+
+## API keys
+
+API keys are long-lived credentials for machine-to-machine access. They are scoped to your tenant and are useful for CI pipelines, webhooks, and other automation where exchanging credentials on every request is impractical.
+
+### Managing API keys in the Dashboard
+
+You create, view, and revoke API keys in the Dashboard under **Settings → API Keys**. Each key has:
+
+- A human-readable **name** you assign when creating it.
+- A **scope** (defaults to `full` if not specified).
+- A **status** — active or revoked.
+
+<Note>
+  The raw key value is shown exactly once when you create it. Copy and store it immediately — you cannot retrieve it again. If you lose it, rotate the key to generate a new one.
+</Note>
+
+### Create a key
+
+In the Dashboard, navigate to **Settings → API Keys** and click **Create API key**. Give the key a name that describes its purpose (e.g. `"CI deployment"` or `"webhook integration"`).
+
+### Revoke a key
+
+To immediately invalidate a key, click **Revoke** next to it in the Dashboard. Revoked keys stop working instantly — there is no grace period.
+
+### Rotate a key
+
+Rotating a key creates a new key and revokes the old one in a single operation. Use rotation to refresh credentials on a schedule or after a potential exposure.
+
+<Tip>
+  Build rotation into your deployment process. Rotate API keys on a regular schedule rather than waiting for a suspected compromise.
+</Tip>
+
+## Error codes
+
+| Status | Meaning | Common cause |
+|---|---|---|
+| `401` | Invalid credentials | Wrong email/password, incorrect `client_id` or `client_secret`, or expired token. |
+| `403` | Not permitted | Valid credentials but the account lacks permission for the requested resource or action. |
+
+When you receive a `401`, verify your credentials and that the token has not expired. When you receive a `403`, check that your user or tenant has the required role for the operation.
+
+<CodeGroup>
+
+```json 401 response
+{
+  "error": "Invalid client_id or client_secret"
+}
+```
+
+```json 403 response
+{
+  "error": "You are not a member of this organization"
+}
+```
+
+</CodeGroup>

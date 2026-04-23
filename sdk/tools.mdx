@@ -1,0 +1,374 @@
+---
+title: "Built-in Tool Servers in @svantic/sdk"
+description: "Reference for FilesystemToolServer, CodeRunnerToolServer, and BuiltinToolLoader — add filesystem access, code execution, and pre-built integrations to agents."
+---
+
+`@svantic/sdk` ships three tool server classes and a suite of pre-built integration tools. `FilesystemToolServer` and `CodeRunnerToolServer` produce MCP server configurations you register with an agent via `agent.register_mcp()`. `BuiltinToolLoader` loads pre-built tool definitions for GitHub, Jira, Slack, and other services.
+
+All three are available from the root export or from `@svantic/sdk/tools`:
+
+```typescript
+import { FilesystemToolServer, CodeRunnerToolServer, BuiltinToolLoader } from '@svantic/sdk';
+// or
+import { FilesystemToolServer, CodeRunnerToolServer, BuiltinToolLoader } from '@svantic/sdk/tools';
+```
+
+---
+
+## FilesystemToolServer
+
+Produces an MCP server configuration for the official `@modelcontextprotocol/server-filesystem` package. The MCP server process runs locally on the agent's machine, scoped to a root directory. File operations from the agent are constrained to that root.
+
+### Constructor
+
+```typescript
+new FilesystemToolServer(options: FilesystemToolServerOptions)
+```
+
+<ParamField body="options.root" type="string" required>
+  Root directory to scope all file operations to. The MCP server rejects any path outside this directory.
+</ParamField>
+
+<ParamField body="options.package_name" type="string" default="@modelcontextprotocol/server-filesystem">
+  npm package to launch via `npx`. Override to pin a specific version, for example `@modelcontextprotocol/server-filesystem@0.6.2`.
+</ParamField>
+
+<ParamField body="options.name" type="string" default="filesystem">
+  Server name used for registration. Becomes the prefix for all discovered tool capability names.
+</ParamField>
+
+### Methods
+
+#### `config(): McpServerConfig`
+
+Returns the MCP server configuration object to pass to `agent.register_mcp()`.
+
+```typescript
+interface McpServerConfig {
+  command: string; // 'npx'
+  args: string[];  // ['-y', package_name, root]
+}
+```
+
+#### `as_registration(): Record<string, McpServerConfig>`
+
+Returns an object keyed by `name`, ready to spread into a registration call.
+
+### Properties
+
+<ResponseField name="name" type="string">
+  The server name used for registration.
+</ResponseField>
+
+<ResponseField name="root" type="string">
+  The root directory this tool is scoped to.
+</ResponseField>
+
+**Example**
+
+```typescript
+import { Agent, FilesystemToolServer } from '@svantic/sdk';
+import express from 'express';
+
+const app = express();
+const agent = new Agent({ name: 'file-agent', description: 'Reads project files.', url: 'http://localhost:4000' });
+
+const fs_tool = new FilesystemToolServer({ root: '/home/user/project' });
+
+// Registers capabilities like 'filesystem_read_file', 'filesystem_write_file', etc.
+const registered = await agent.register_mcp(fs_tool.name, fs_tool.config());
+console.log('Registered:', registered);
+
+agent.expose(app);
+app.listen(4000);
+```
+
+<Tip>
+Use `fs_tool.as_registration()` when a method accepts `Record<string, McpServerConfig>` directly, to avoid repeating the server name.
+</Tip>
+
+---
+
+## CodeRunnerToolServer
+
+Produces an MCP server configuration for a custom code execution server script. Unlike `FilesystemToolServer`, there is no standard MCP package for code execution — you provide your own server script that exposes MCP-compatible tools (for example, `run_script` or `exec_command`).
+
+### Constructor
+
+```typescript
+new CodeRunnerToolServer(options: CodeRunnerToolServerOptions)
+```
+
+<ParamField body="options.root" type="string" required>
+  Project root directory where scripts execute. Passed to the server script as `--root`.
+</ParamField>
+
+<ParamField body="options.server_script" type="string" required>
+  Path to the MCP server script, for example `./tools/code-runner-mcp.js`. Must expose MCP-compatible tool definitions.
+</ParamField>
+
+<ParamField body="options.command" type="string" default="node">
+  Runtime command to launch the script, for example `node`, `ts-node`, or `python3`.
+</ParamField>
+
+<ParamField body="options.extra_args" type="string[]">
+  Additional arguments passed to the command before the script path.
+</ParamField>
+
+<ParamField body="options.name" type="string" default="code-runner">
+  Server name used for registration. Becomes the prefix for discovered tool capability names.
+</ParamField>
+
+<ParamField body="options.allowed_commands" type="string[]">
+  Commands the script is allowed to execute, for example `['node', 'python3', 'npx']`. Passed as `--allowed-commands <csv>` to the server script when provided.
+</ParamField>
+
+<ParamField body="options.timeout_ms" type="number">
+  Execution timeout in milliseconds. Passed as `--timeout <ms>` to the server script when provided.
+</ParamField>
+
+### Methods
+
+#### `config(): McpServerConfig`
+
+Returns the MCP server configuration. Arguments are built as:
+
+```
+[...extra_args, server_script, '--root', root, '--allowed-commands', ..., '--timeout', ...]
+```
+
+#### `as_registration(): Record<string, McpServerConfig>`
+
+Returns an object keyed by `name`.
+
+### Properties
+
+<ResponseField name="name" type="string">
+  The server name used for registration.
+</ResponseField>
+
+<ResponseField name="root" type="string">
+  The project root directory.
+</ResponseField>
+
+**Example**
+
+```typescript
+import { Agent, CodeRunnerToolServer } from '@svantic/sdk';
+
+const runner = new CodeRunnerToolServer({
+  root: '/workspace/project',
+  server_script: './tools/runner-mcp.js',
+  allowed_commands: ['node', 'python3', 'npx'],
+  timeout_ms: 30_000,
+});
+
+const registered = await agent.register_mcp(runner.name, runner.config());
+```
+
+---
+
+## BuiltinToolLoader
+
+`BuiltinToolLoader` loads pre-built tool definitions that ship with the SDK. Each domain maps to a set of tools backed by publicly available APIs.
+
+### Supported domains
+
+<ResponseField name="BUILTIN_DOMAINS" type="BuiltinDomain[]">
+
+```typescript
+type BuiltinDomain =
+  | 'github'
+  | 'bitbucket'
+  | 'jira'
+  | 'zendesk'
+  | 'slack'
+  | 'shell'
+  | 'datadog';
+```
+
+</ResponseField>
+
+| Domain | Tools included |
+|---|---|
+| `github` | `github_list_prs`, `github_get_pr`, `github_get_pr_diff`, `github_create_pr`, `github_post_review`, `github_merge_pr` |
+| `bitbucket` | `bitbucket_list_prs`, `bitbucket_get_pr`, `bitbucket_get_pr_diff`, `bitbucket_create_pr`, `bitbucket_post_comment`, `bitbucket_merge_pr` |
+| `jira` | `jira_get_issue`, `jira_create_issue`, `jira_transition_issue`, `jira_add_comment` |
+| `zendesk` | `zendesk_list_tickets`, `zendesk_get_ticket`, `zendesk_create_ticket`, `zendesk_update_ticket`, `zendesk_add_comment` |
+| `slack` | `slack_send_message` |
+| `shell` | `shell_exec` |
+| `datadog` | `datadog_get_alerts`, `datadog_query_metrics` |
+
+### Constructor
+
+```typescript
+new BuiltinToolLoader()
+```
+
+No constructor arguments.
+
+---
+
+### `load_domain(domain): Promise<BuiltinLoadResult>`
+
+Load all tools for a specific domain. Returns a `BuiltinLoadResult` with successfully loaded tools and any errors encountered.
+
+```typescript
+async load_domain(domain: BuiltinDomain): Promise<BuiltinLoadResult>
+```
+
+<ParamField body="domain" type="BuiltinDomain" required>
+  The domain to load.
+</ParamField>
+
+---
+
+### `load_domains(domains): Promise<BuiltinLoadResult>`
+
+Load tools for multiple domains in a single call.
+
+```typescript
+async load_domains(domains: BuiltinDomain[]): Promise<BuiltinLoadResult>
+```
+
+---
+
+### `load_all(): Promise<BuiltinLoadResult>`
+
+Load all tools across all domains.
+
+```typescript
+async load_all(): Promise<BuiltinLoadResult>
+```
+
+---
+
+### `list_domain(domain): string[]`
+
+Return the list of tool file names available for a domain without loading them. Useful for inspection before committing to a load.
+
+```typescript
+list_domain(domain: BuiltinDomain): string[]
+```
+
+---
+
+### Properties
+
+<ResponseField name="domains" type="BuiltinDomain[]">
+  All available domain names. Returns a copy of `BUILTIN_DOMAINS`.
+</ResponseField>
+
+---
+
+### `BuiltinLoadResult`
+
+```typescript
+interface BuiltinLoadResult {
+  tools: LocalToolDefinition[];  // Successfully loaded tool definitions
+  loaded: string[];              // Tool names that loaded successfully
+  errors: string[];              // Errors for tools that failed to load
+}
+```
+
+Always check `errors` after loading — a missing environment variable or import failure produces a non-throwing error in the `errors` array.
+
+---
+
+### Using builtin tools with an agent
+
+Builtin tools are `LocalToolDefinition` objects. To expose them as A2A capabilities on an `Agent`, convert each one using `define_capability()`:
+
+<CodeGroup>
+
+```typescript Load a single domain
+import { Agent, BuiltinToolLoader } from '@svantic/sdk';
+
+const agent = new Agent({ name: 'ops-agent', description: 'GitHub and Jira operations.', url: 'http://localhost:4000' });
+const loader = new BuiltinToolLoader();
+
+const { tools, loaded, errors } = await loader.load_domains(['github', 'jira']);
+
+if (errors.length > 0) {
+  console.warn('Some tools failed to load:', errors);
+}
+
+for (const tool of tools) {
+  agent.define_capability({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    handler: async (args, _ctx) => tool.handler(args),
+  });
+}
+
+agent.expose(app);
+```
+
+```typescript Load all domains
+import { Agent, BuiltinToolLoader } from '@svantic/sdk';
+
+const agent = new Agent({ name: 'all-tools-agent', description: 'All built-in integrations.', url: 'http://localhost:4000' });
+const loader = new BuiltinToolLoader();
+
+const { tools, errors } = await loader.load_all();
+
+for (const tool of tools) {
+  agent.define_capability({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    handler: async (args) => tool.handler(args),
+  });
+}
+```
+
+</CodeGroup>
+
+<Note>
+Builtin tools read credentials from environment variables at invocation time (for example `GITHUB_TOKEN`, `JIRA_API_TOKEN`, `SLACK_BOT_TOKEN`). Set these in your deployment environment before calling the tool handlers.
+</Note>
+
+---
+
+## Type reference
+
+### `FilesystemToolServerOptions`
+
+```typescript
+interface FilesystemToolServerOptions {
+  root: string;
+  package_name?: string;
+  name?: string;
+}
+```
+
+### `CodeRunnerToolServerOptions`
+
+```typescript
+interface CodeRunnerToolServerOptions {
+  root: string;
+  server_script: string;
+  command?: string;
+  extra_args?: string[];
+  name?: string;
+  allowed_commands?: string[];
+  timeout_ms?: number;
+}
+```
+
+### `BuiltinDomain`
+
+```typescript
+type BuiltinDomain = 'github' | 'bitbucket' | 'jira' | 'zendesk' | 'slack' | 'shell' | 'datadog';
+```
+
+### `BuiltinLoadResult`
+
+```typescript
+interface BuiltinLoadResult {
+  tools: LocalToolDefinition[];
+  loaded: string[];
+  errors: string[];
+}
+```

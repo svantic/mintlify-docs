@@ -1,0 +1,284 @@
+---
+title: "Svantic CLI Command Reference"
+description: "Reference for every svantic CLI command: status, tenants, agents, sessions, config show, and version — with usage syntax, arguments, and example output."
+---
+
+This page documents every command available in the `svantic` CLI. All commands read the gateway URL and auth token from `SVANTIC_GATEWAY_URL` and `SVANTIC_TOKEN` environment variables (or `~/.svantic/config.json`). See the [CLI Overview](/cli/overview) for configuration details.
+
+## Global flags
+
+| Flag | Description |
+|------|-------------|
+| `-v, --version` | Print the CLI version and exit |
+| `--help` | Print help for any command or subcommand |
+
+```bash
+svantic --version
+svantic --help
+svantic tenants --help
+```
+
+---
+
+## `svantic status`
+
+Calls the `/health` endpoint on the gateway and prints a summary of service health, version, uptime, and mesh connectivity.
+
+**Usage**
+
+```bash
+svantic status
+```
+
+**Example output**
+
+```
+Checking https://gateway.example.com …
+
+  Gateway:        ✔ healthy
+  Service:        svantic-gateway
+  Version:        0.1.0
+  Uptime:         3842s
+  Mesh connected: yes
+```
+
+If the gateway returns a non-2xx response:
+
+```
+  ✘ Gateway returned HTTP 503: Service Unavailable
+```
+
+If the gateway is unreachable:
+
+```
+  ✘ Could not reach gateway at https://gateway.example.com
+
+    fetch failed
+```
+
+The process exits with code `1` on any error.
+
+---
+
+## `svantic tenants`
+
+Commands for listing and inspecting tenants.
+
+### `svantic tenants list`
+
+Lists all tenants registered with the gateway.
+
+**Usage**
+
+```bash
+svantic tenants list
+```
+
+**Example output**
+
+```
+Tenants (3 total):
+
+┌─────────┬────────────────────────┬───────────────────┬──────────┬──────────────────────────┐
+│ (index) │ Tenant ID              │ Name              │ Status   │ Created                  │
+├─────────┼────────────────────────┼───────────────────┼──────────┼──────────────────────────┤
+│ 0       │ 'tenant-acme'          │ 'Acme Corp'       │ 'active' │ '2025-01-15T10:23:00Z'   │
+│ 1       │ 'tenant-globex'        │ 'Globex'          │ 'active' │ '2025-02-03T08:00:00Z'   │
+│ 2       │ 'tenant-initech'       │ 'Initech'         │ 'active' │ '2025-03-20T14:55:00Z'   │
+└─────────┴────────────────────────┴───────────────────┴──────────┴──────────────────────────┘
+```
+
+If no tenants exist:
+
+```
+No tenants found.
+```
+
+### `svantic tenants get <id>`
+
+Fetches and displays detailed information for a single tenant, including its access policy and guard configuration.
+
+**Usage**
+
+```bash
+svantic tenants get <id>
+```
+
+**Arguments**
+
+| Argument | Description |
+|----------|-------------|
+| `<id>` | Tenant ID (e.g. `tenant-acme`) |
+
+**Example output**
+
+```
+Tenant: tenant-acme
+
+  Name:       Acme Corp
+  Policy:     {
+    "policy_mode": "allowlist",
+    "allowed_types": [
+      "summarizer",
+      "researcher"
+    ]
+  }
+  Guard cfg:  yes
+```
+
+If the tenant has been deleted, a `Deleted` line is appended:
+
+```
+  Deleted:    2025-04-01T12:00:00Z (by admin@acme.com)
+```
+
+---
+
+## `svantic agents`
+
+Commands for browsing registered agents.
+
+### `svantic agents list`
+
+Lists all agents currently registered in the mesh.
+
+**Usage**
+
+```bash
+svantic agents list
+```
+
+**Example output**
+
+```
+Agents (2 total):
+
+┌─────────┬───────────────────────────┬──────────────┬──────────────────┬──────────┬─────────────────┐
+│ (index) │ Agent ID                  │ Type         │ Name             │ Status   │ Tenant          │
+├─────────┼───────────────────────────┼──────────────┼──────────────────┼──────────┼─────────────────┤
+│ 0       │ 'agent-abc123'            │ 'summarizer' │ 'Summarizer v2'  │ 'online' │ 'tenant-acme'   │
+│ 1       │ 'agent-def456'            │ 'researcher' │ 'Researcher v1'  │ 'online' │ 'tenant-acme'   │
+└─────────┴───────────────────────────┴──────────────┴──────────────────┴──────────┴─────────────────┘
+```
+
+If no agents are registered:
+
+```
+No agents registered.
+```
+
+---
+
+## `svantic sessions`
+
+Commands for inspecting recent sessions.
+
+### `svantic sessions list`
+
+Fetches the 25 most recent sessions across all tenants, sorted by creation time descending.
+
+**Usage**
+
+```bash
+svantic sessions list
+```
+
+**Example output**
+
+```
+Recent sessions (47 total):
+
+┌─────────┬────────────────────────────┬─────────────────┬──────────────┬──────────────┬──────────┬──────────────────────────┐
+│ (index) │ Session ID                 │ Tenant          │ Agent Type   │ Status       │ Messages │ Created                  │
+├─────────┼────────────────────────────┼─────────────────┼──────────────┼──────────────┼──────────┼──────────────────────────┤
+│ 0       │ 'sess-zxy987'              │ 'tenant-acme'   │ 'summarizer' │ 'completed'  │ 8        │ '2025-04-10T09:12:00Z'   │
+│ 1       │ 'sess-mno654'              │ 'tenant-globex' │ 'researcher' │ 'active'     │ 3        │ '2025-04-10T08:45:00Z'   │
+└─────────┴────────────────────────────┴─────────────────┴──────────────┴──────────────┴──────────┴──────────────────────────┘
+```
+
+The command always returns up to 25 rows. The total count reflects all sessions in the system.
+
+If no sessions exist:
+
+```
+No sessions found.
+```
+
+---
+
+## `svantic config`
+
+Commands for inspecting the resolved CLI configuration.
+
+### `svantic config show`
+
+Displays the gateway URL, token status, config file path, and whether environment variable overrides are active. Useful for debugging connectivity issues before running other commands.
+
+**Usage**
+
+```bash
+svantic config show
+```
+
+**Example output**
+
+```
+Svantic CLI Configuration:
+
+  Gateway URL:    https://gateway.example.com
+  Token:          ••••my-token
+  Config file:    /home/user/.svantic/config.json (found)
+  Env overrides:
+    SVANTIC_GATEWAY_URL = https://gateway.example.com
+    SVANTIC_TOKEN       = (set)
+```
+
+When no token is configured:
+
+```
+  Token:          (not set)
+```
+
+When the config file does not exist:
+
+```
+  Config file:    /home/user/.svantic/config.json (not found)
+```
+
+The token value is always redacted — only the last 8 characters are shown. If `SVANTIC_TOKEN` is set as an environment variable, it appears as `(set)` without any characters revealed.
+
+---
+
+## `svantic version`
+
+Prints the CLI version string.
+
+**Usage**
+
+```bash
+svantic version
+# or
+svantic -v
+# or
+svantic --version
+```
+
+**Example output**
+
+```
+0.1.0
+```
+
+---
+
+## Error handling
+
+All commands follow a consistent error pattern:
+
+- **API errors (non-2xx response):** Print `✘ API error: HTTP <code> <text>` and exit with code `1`.
+- **Network errors (unreachable gateway):** Print `✘ Could not reach gateway at <url>` and the underlying error message, then exit with code `1`.
+- **Empty results:** Print a `No <resource> found.` message and exit with code `0`.
+
+<Tip>
+  Run `svantic config show` first if a command fails unexpectedly. It confirms whether the CLI is pointing at the right gateway and has a token configured.
+</Tip>

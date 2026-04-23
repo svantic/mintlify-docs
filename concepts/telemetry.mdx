@@ -1,0 +1,179 @@
+---
+title: "Observability and Tracing in Svantic"
+description: "Learn how Svantic captures distributed traces, LLM token usage, and events across agent boundaries using W3C Trace Context and the @svantic/telemetry package."
+---
+
+Svantic captures observability data automatically as your agents run. Every `/ask` request produces a distributed trace that spans the Mesh, each agent invoked, and every capability call made along the way. You see this data in the Dashboard as a waterfall view, session-level trace summaries, and usage charts that track token consumption per model, per tenant, and over time.
+
+You do not need to instrument anything to get basic observability — the `@svantic/sdk` and the Mesh emit spans automatically. If you want to add your own spans or record custom events, the `@svantic/telemetry` package gives you the tools to do it.
+
+## What Svantic captures
+
+| Data type | What it includes |
+|---|---|
+| **Spans** | Start/end times, parent–child relationships, agent type, capability name, status |
+| **LLM usage** | Input and output token counts, model name, associated span |
+| **Events** | Session lifecycle (created, interrupted), agent binding, custom events you emit |
+
+## W3C Trace Context
+
+Svantic uses the W3C Trace Context standard for all distributed tracing. Trace and span IDs follow the spec:
+
+- **Trace ID** — 32-character lowercase hex string (16 random bytes)
+- **Span ID** — 16-character lowercase hex string (8 random bytes)
+
+These IDs are generated using `crypto.randomBytes` and are compatible with any OpenTelemetry-compliant backend.
+
+## Context propagation across agent boundaries
+
+When the Mesh dispatches a capability invocation to a remote agent, it injects two HTTP headers so the agent's local spans join the same distributed trace:
+
+- **`traceparent`** — carries the current trace ID and parent span ID in W3C format: `00-{trace_id}-{span_id}-01`
+- **`baggage`** — carries session and tenant context as key–value pairs
+
+The `baggage` header includes:
+
+| Key | Value |
+|---|---|
+| `svantic.session_id` | The session the invocation belongs to |
+| `svantic.tenant_id` | Multi-tenancy scoping |
+| `svantic.invocation_id` | Links this specific capability call to the remote execution |
+| `svantic.agent_type` | Identifies the calling agent in the trace DAG |
+| `svantic.instance_id` | Pinpoints the specific agent instance |
+
+If your agent uses `@svantic/telemetry`, it can extract these headers and parent its local spans under the incoming trace context automatically:
+
+```typescript
+import { ContextExtractor } from '@svantic/telemetry/propagation';
+
+const extracted = ContextExtractor.extract(inbound_headers);
+if (extracted) {
+  tracer.adopt_remote_context(extracted.trace_id, extracted.span_id);
+}
+```
+
+## Telemetry ingest endpoints
+
+The Mesh exposes two endpoints for receiving telemetry. Both require an `X-API-Key` header set to your tenant secret.
+
+| Endpoint | Format | Use case |
+|---|---|---|
+| `POST /telemetry/report` | Svantic batched payload (`{ agent_type, instance_id, traces?, usage?, events? }`) | Default used by `@svantic/sdk`. Accepts spans, usage records, and events in a single request. |
+| `POST /telemetry/otlp` | Standard OTLP JSON (`{ resource_spans: [...] }`) | Compatible with any OpenTelemetry SDK. Agent identity is read from the `service.name` and `service.instance.id` resource attributes. |
+
+Both endpoints map spans into the trace store, forward usage records to the usage tracker, and publish events to the real-time dashboard stream.
+
+## The @svantic/telemetry package
+
+`@svantic/telemetry` is a standalone Node.js package for manual instrumentation. It has no dependency on `@svantic/sdk` — you can use it in any service, not just Svantic agents.
+
+Install it:
+
+```bash
+npm install @svantic/telemetry
+```
+
+### Export to the Mesh
+
+```typescript
+import { SvanticTelemetry } from '@svantic/telemetry';
+
+const telemetry = SvanticTelemetry.init({
+  service_name: 'my-agent',
+  export: {
+    endpoint: 'https://mesh.your-domain.com/telemetry/otlp',
+    auth: { type: 'api_key', key: 'your-tenant-secret' },
+  },
+});
+
+const tracer = telemetry.get_tracer();
+```
+
+### Export to an OTLP collector
+
+If you route telemetry to your own infrastructure (Jaeger, Grafana Tempo, Datadog, etc.), use the OTLP export option:
+
+```typescript
+const telemetry = SvanticTelemetry.init({
+  service_name: 'billing-service',
+  export: {
+    endpoint: 'http://otel-collector:4318/v1/traces',
+    protocol: 'otlp',
+    auth: { type: 'bearer', token: 'my-token' },
+  },
+});
+```
+
+### Creating spans
+
+<CodeGroup>
+
+```typescript Generic span
+const span = tracer.start_span('handle-request', {
+  'request.id': requestId,
+});
+// ... your logic ...
+span.end();
+```
+
+```typescript LLM span
+const llm_span = tracer.start_llm_span('gemini-1.5-pro');
+// ... call the model ...
+llm_span.end({ input_tokens: 120, output_tokens: 340 });
+```
+
+```typescript Tool span
+const tool_span = tracer.start_tool_span('search_products', {
+  'svantic.tool.args': JSON.stringify({ query: 'running shoes' }),
+});
+// ... execute tool ...
+tool_span.end();
+```
+
+</CodeGroup>
+
+Spans nest automatically — starting a new span while another is active makes it a child. This mirrors how the distributed trace is structured in the Dashboard waterfall.
+
+### Injecting propagation headers
+
+If your agent makes outbound calls to other services that you want to include in the same trace, inject the propagation headers before the request:
+
+```typescript
+import { ContextInjector } from '@svantic/telemetry/propagation';
+
+const headers: Record<string, string> = {};
+ContextInjector.inject(headers, {
+  trace_id: currentSpan.trace_id,
+  span_id: currentSpan.span_id,
+  baggage: {
+    'svantic.session_id': sessionId,
+    'svantic.tenant_id': tenantId,
+  },
+});
+
+// Pass headers to your outbound HTTP request
+```
+
+## What you see in the Dashboard
+
+The Dashboard surfaces telemetry data in three places:
+
+- **Session traces** — a list of all traces for a session, each linking to the waterfall view
+- **Waterfall view** — the full distributed trace for a single `/ask` request: every span across every agent, nested by parent–child relationship, with timings
+- **Usage charts** — token consumption over time, broken down by model and aggregated per tenant
+
+<Tip>
+  When building and debugging agents locally, initialize telemetry with `export: { type: 'console' }`. This prints spans to stdout without sending anything to the Mesh, so you can verify instrumentation before connecting to a live environment.
+</Tip>
+
+<AccordionGroup>
+  <Accordion title="Do I need @svantic/telemetry if I'm using @svantic/sdk?">
+    No. The `@svantic/sdk` already includes telemetry support — spans for capability invocations are emitted automatically when you pass a `telemetry` instance to the `Agent` constructor. You only need to install `@svantic/telemetry` directly if you want to instrument code outside of an SDK agent, or if you want to add custom spans and events beyond what the SDK captures automatically.
+  </Accordion>
+  <Accordion title="Can I send telemetry to my own backend instead of Svantic?">
+    Yes. Use `protocol: 'otlp'` in the export configuration and point `endpoint` at any OTLP-compatible collector. The spans will not appear in the Svantic Dashboard, but they will flow into your own observability stack.
+  </Accordion>
+  <Accordion title="How are LLM token counts associated with a session?">
+    Token counts are recorded on LLM spans. Each LLM span carries the session ID in its baggage context, which the Mesh uses to aggregate usage per session and per tenant. Usage records are surfaced in the Dashboard usage charts.
+  </Accordion>
+</AccordionGroup>

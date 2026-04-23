@@ -1,0 +1,279 @@
+---
+title: "Define Agent Capabilities in Svantic"
+description: "Learn how to define named capabilities with JSON Schema parameters, typed handlers, and tags — the building blocks of every Svantic agent."
+---
+
+A capability is the unit of work your agent exposes to the Svantic Mesh. Each capability has a name, a description, a JSON Schema that describes its input parameters, and an async handler function that runs when the capability is invoked. The Mesh publishes capabilities in the agent card so that orchestrators and LLMs can discover and call them by name. This page explains how to define capabilities effectively.
+
+## What makes up a capability
+
+Every capability you register with `agent.define_capability()` follows the `CapabilityConfig` interface:
+
+<ParamField path="name" type="string" required>
+  Unique name for this capability in `snake_case` (for example `check_stock`, `extract_page_content`). This is the key used when the Mesh invokes the capability.
+</ParamField>
+
+<ParamField path="description" type="string" required>
+  Human-readable description shown to orchestrators and the LLM. Write it from the perspective of what the capability does — the more specific, the better the LLM can decide when to use it.
+</ParamField>
+
+<ParamField path="parameters" type="CapabilitySchema" required>
+  A JSON Schema object describing the capability's input. Must be `type: "object"` with a `properties` map. Mark required parameters in the `required` array.
+</ParamField>
+
+<ParamField path="handler" type="function" required>
+  An async function that receives the parsed arguments and a session context, and returns any JSON-serializable value.
+</ParamField>
+
+<ParamField path="tags" type="string[]">
+  Optional list of tags for organizing capabilities in the agent card (for example `['github', 'issues']` or `['mcp', 'filesystem']`).
+</ParamField>
+
+## Defining your first capability
+
+The simplest capability takes a single string argument and returns a value.
+
+```typescript agent.ts
+agent.define_capability({
+  name: 'check_stock',
+  description: 'Return the current stock level for a product SKU',
+  parameters: {
+    type: 'object',
+    properties: {
+      product_id: {
+        type: 'string',
+        description: 'The product SKU to check',
+      },
+    },
+    required: ['product_id'],
+  },
+  handler: async (args) => {
+    return { product_id: args.product_id, available: 42 };
+  },
+});
+```
+
+## Parameter schema reference
+
+Parameters follow the standard [JSON Schema](https://json-schema.org/) specification. The top-level schema must be `type: "object"`. Each property in `properties` is a `SchemaProperty`.
+
+### Supported property types
+
+| Type | Use for |
+|---|---|
+| `string` | Text values, IDs, slugs |
+| `number` | Floating-point numbers |
+| `integer` | Whole numbers |
+| `boolean` | True/false flags |
+| `array` | Lists of values |
+| `object` | Nested structured data |
+
+### Schema property options
+
+```typescript
+{
+  type: 'string' | 'number' | 'boolean' | 'integer' | 'array' | 'object';
+  description?: string;   // Shown to the LLM
+  enum?: string[];        // Restrict to specific values
+  default?: unknown;      // Default if not provided
+  items?: SchemaProperty; // Schema for array items
+  properties?: Record<string, SchemaProperty>; // For nested objects
+  required?: string[];    // Required fields within a nested object
+}
+```
+
+## Multiple capabilities per agent
+
+Register as many capabilities as your agent needs. Each one appears as a separate skill in the agent card.
+
+```typescript agent.ts
+import express from 'express';
+import { Agent } from '@svantic/sdk';
+
+const app = express();
+
+const agent = new Agent({
+  name: 'inventory',
+  description: 'Manage product inventory',
+  url: 'http://localhost:4000',
+});
+
+// Capability 1: look up stock level
+agent.define_capability({
+  name: 'check_stock',
+  description: 'Return the current stock level for a product SKU',
+  tags: ['inventory', 'read'],
+  parameters: {
+    type: 'object',
+    properties: {
+      product_id: {
+        type: 'string',
+        description: 'Product SKU',
+      },
+    },
+    required: ['product_id'],
+  },
+  handler: async (args) => {
+    const id = args.product_id as string;
+    return { product_id: id, available: 42 };
+  },
+});
+
+// Capability 2: update stock level
+agent.define_capability({
+  name: 'update_stock',
+  description: 'Set the stock quantity for a product SKU',
+  tags: ['inventory', 'write'],
+  parameters: {
+    type: 'object',
+    properties: {
+      product_id: {
+        type: 'string',
+        description: 'Product SKU to update',
+      },
+      quantity: {
+        type: 'integer',
+        description: 'New stock quantity (must be >= 0)',
+      },
+    },
+    required: ['product_id', 'quantity'],
+  },
+  handler: async (args) => {
+    const id = args.product_id as string;
+    const qty = args.quantity as number;
+    // Replace with your real update logic
+    return { product_id: id, updated_quantity: qty, success: true };
+  },
+});
+
+// Capability 3: list low-stock products
+agent.define_capability({
+  name: 'list_low_stock',
+  description: 'Return products with stock below a given threshold',
+  tags: ['inventory', 'read'],
+  parameters: {
+    type: 'object',
+    properties: {
+      threshold: {
+        type: 'integer',
+        description: 'Stock quantity threshold (default 10)',
+        default: 10,
+      },
+    },
+  },
+  handler: async (args) => {
+    const threshold = (args.threshold as number) ?? 10;
+    // Replace with your real query
+    return {
+      threshold,
+      products: [
+        { product_id: 'SKU-001', available: 3 },
+        { product_id: 'SKU-007', available: 7 },
+      ],
+    };
+  },
+});
+
+agent.expose(app);
+app.listen(4000);
+```
+
+## Using session context
+
+Every handler receives a second argument — `context` — containing the session ID and tenant ID of the invoking session. Use this when you need to scope a database query or audit log to a specific tenant.
+
+```typescript
+agent.define_capability({
+  name: 'get_orders',
+  description: 'Return recent orders for the current tenant',
+  parameters: {
+    type: 'object',
+    properties: {
+      limit: {
+        type: 'integer',
+        description: 'Maximum number of orders to return',
+        default: 20,
+      },
+    },
+  },
+  handler: async (args, context) => {
+    const limit = (args.limit as number) ?? 20;
+    console.log(`Fetching orders for tenant ${context.tenant_id}`);
+
+    // Use context.tenant_id to scope the query
+    return {
+      tenant_id: context.tenant_id,
+      session_id: context.session_id,
+      orders: [], // Replace with your real data source
+    };
+  },
+});
+```
+
+<Note>
+  `context.session_id` and `context.tenant_id` are forwarded automatically by the Svantic Mesh when it invokes your capability. You do not need to pass them manually.
+</Note>
+
+## Organizing capabilities with tags
+
+Tags appear in the agent card and can be used to group related capabilities. Common patterns:
+
+```typescript
+// Group by domain
+tags: ['github', 'issues']
+tags: ['jira', 'tickets']
+
+// Group by action type
+tags: ['read']
+tags: ['write']
+
+// Mark MCP-derived capabilities (set automatically by register_mcp)
+tags: ['mcp', 'filesystem']
+```
+
+<Tip>
+  Use consistent tags across your agent. The Mesh and dashboard use them for display and filtering.
+</Tip>
+
+## Returning values from handlers
+
+Handlers must return a JSON-serializable value. The SDK wraps your return value in an A2A `DataPart` response automatically. You can return any of:
+
+- A plain object: `{ status: 'ok', count: 5 }`
+- A string: `'done'`
+- A number: `42`
+- An array: `[{ id: 1 }, { id: 2 }]`
+- `null`
+
+<Warning>
+  Do not return `undefined` from a handler. Return `null` or an empty object instead — `undefined` is not JSON-serializable and the response will be empty.
+</Warning>
+
+## Error handling
+
+Throw an `Error` from your handler to signal a failure. The SDK catches it and returns a structured error response to the caller with the error message.
+
+```typescript
+handler: async (args) => {
+  const id = args.product_id as string;
+  if (!id) {
+    throw new Error('product_id is required');
+  }
+  const product = await db.find(id);
+  if (!product) {
+    throw new Error(`Product ${id} not found`);
+  }
+  return product;
+},
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Connect MCP tool servers" icon="plug" href="/guides/mcp-tools">
+    Automatically register MCP tools as capabilities without writing handlers by hand.
+  </Card>
+  <Card title="Connect to the Mesh" icon="network-wired" href="/guides/connect-mesh">
+    Register your agent with Svantic and start receiving requests.
+  </Card>
+</CardGroup>

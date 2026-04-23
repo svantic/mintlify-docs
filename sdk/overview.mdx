@@ -1,0 +1,104 @@
+---
+title: "@svantic/sdk Reference Overview and Install Guide"
+description: "Install @svantic/sdk and learn the package's subpath exports, core classes, and how to turn any Node.js service into an A2A-compliant agent in five lines."
+---
+
+`@svantic/sdk` is a TypeScript A2A agent framework that turns any Node.js service into an A2A-compliant agent. You define capabilities, expose them over an Express application, and optionally connect to Svantic Mesh for production routing, authentication, and telemetry — all without changing your core agent logic.
+
+## Installation
+
+```bash
+npm install @svantic/sdk
+```
+
+Requires Node.js 20 or later. Express (`^4.21.0` or `^5.1.0`) is a peer dependency needed only when you call `agent.expose(app)`.
+
+## Quick start
+
+```typescript
+import express from 'express';
+import { Agent } from '@svantic/sdk';
+
+const app = express();
+const agent = new Agent({ name: 'summarizer', description: 'Summarizes text.', url: 'http://localhost:4000' });
+
+agent.define_capability({
+  name: 'summarize',
+  description: 'Summarize a block of text.',
+  parameters: {
+    type: 'object',
+    properties: { text: { type: 'string', description: 'Text to summarize.' } },
+    required: ['text'],
+  },
+  handler: async ({ text }) => ({ summary: String(text).slice(0, 100) }),
+});
+
+agent.expose(app);
+app.listen(4000);
+```
+
+After calling `expose()`, two routes are active on your Express app:
+
+- `GET /.well-known/agent-card.json` — agent discovery endpoint
+- `POST /ask` — JSON-RPC 2.0 endpoint for A2A task messages
+
+## Subpath exports
+
+The package ships six subpath exports. Import only what you need.
+
+| Import path | What it exports |
+|---|---|
+| `@svantic/sdk` | `Agent`, `RemoteAgent`, `AgentDiscovery`, `MessageBuilder`, `CapabilityExecutor`, `FilesystemToolServer`, `CodeRunnerToolServer`, `BuiltinToolLoader`, `SvanticTelemetry`, `SvanticTracer` |
+| `@svantic/sdk/mesh` | `MeshConnector`, `MeshAuth`, `MeshSpanExporter`, `MeshConnectorConfig`, `MeshCredentials`, `TokenExchangeOptions` |
+| `@svantic/sdk/telemetry` | `SvanticTelemetry`, `SvanticTracer`, `SpanExporter`, `TelemetryInitOptions` |
+| `@svantic/sdk/tools` | `BuiltinToolLoader`, `FilesystemToolServer`, `CodeRunnerToolServer`, `BUILTIN_DOMAINS`, `HttpHelper` |
+| `@svantic/sdk/tools/builtin` | Individual builtin tool modules |
+| `@svantic/sdk/a2a` | A2A protocol types and utilities |
+
+<Note>
+`express` is an optional peer dependency. Install it yourself when you call `agent.expose()`. The SDK does not bundle Express.
+</Note>
+
+## Connecting to Svantic Mesh
+
+For production deployments, wrap your agent with `MeshConnector` to register with the gateway, exchange credentials for a mesh JWT, and keep a heartbeat alive.
+
+```typescript
+import { MeshConnector } from '@svantic/sdk/mesh';
+
+const mesh = new MeshConnector(agent, {
+  gateway_url: process.env.SVANTIC_GATEWAY_URL!,
+  mesh_url: process.env.SVANTIC_MESH_URL!,
+  client_id: process.env.CLIENT_ID!,
+  client_secret: process.env.CLIENT_SECRET!,
+});
+
+await mesh.connect();
+
+// on shutdown
+process.on('SIGTERM', async () => {
+  await mesh.disconnect();
+  await agent.close();
+});
+```
+
+## Telemetry
+
+The SDK integrates `@svantic/telemetry` for OTEL-compliant distributed tracing. Pass a pre-configured `SvanticTelemetry` instance to `AgentConfig.telemetry`; otherwise a no-op instance is created internally. Trace IDs are W3C-compliant 32-character hex strings propagated via `traceparent` and `baggage` headers on outbound calls.
+
+## Reference pages
+
+<CardGroup cols={2}>
+  <Card title="Agent" icon="robot" href="/sdk/agent">
+    Full reference for the `Agent` class — capabilities, MCP registration, Express routing, and lifecycle.
+  </Card>
+  <Card title="RemoteAgent" icon="arrow-right-arrow-left" href="/sdk/remote-agent">
+    Send tasks and stream responses from any A2A agent using `RemoteAgent` and `AgentDiscovery`.
+  </Card>
+  <Card title="MeshConnector" icon="network-wired" href="/sdk/mesh-connector">
+    Register your agent with Svantic Mesh, exchange credentials, and manage heartbeats.
+  </Card>
+  <Card title="Tools" icon="wrench" href="/sdk/tools">
+    Built-in tool servers for filesystem access, code execution, and pre-built integrations.
+  </Card>
+</CardGroup>

@@ -1,0 +1,188 @@
+---
+title: "@svantic/telemetry: Distributed Tracing for Agents"
+description: "Install and configure @svantic/telemetry to add W3C-compliant distributed tracing, LLM token tracking, and pluggable span export to any Node.js agent or service."
+---
+
+`@svantic/telemetry` is a standalone OTEL-based observability package for Node.js. It has no dependency on `@svantic/sdk`, so you can add it to any agent, microservice, or script that needs distributed tracing. The package provides W3C-compliant trace and span IDs, LLM token usage tracking, context propagation via `traceparent` and `baggage` headers, and a pluggable export layer that can send spans to the Svantic mesh, any OTLP-compatible backend, or stdout for local development.
+
+## Installation
+
+```bash
+npm install @svantic/telemetry
+```
+
+For OTLP export to Jaeger, Grafana Tempo, Datadog, or similar backends, also install the peer dependency:
+
+```bash
+npm install @opentelemetry/exporter-trace-otlp-http
+```
+
+## Export scenarios
+
+Call `SvanticTelemetry.init()` once at process startup. The `export` field controls where spans go.
+
+<CodeGroup>
+
+```typescript Svantic Mesh
+import { SvanticTelemetry } from '@svantic/telemetry';
+
+const telemetry = SvanticTelemetry.init({
+    service_name: 'my-agent',
+    export: {
+        endpoint: 'http://localhost:7001/telemetry/otlp',
+        auth: { type: 'api_key', key: 'your-tenant-secret' },
+    },
+});
+
+const tracer = telemetry.get_tracer();
+const span = tracer.start_span('handle-request');
+// ... your logic ...
+span.end();
+
+await telemetry.shutdown();
+```
+
+```typescript OTLP collector
+import { SvanticTelemetry } from '@svantic/telemetry';
+
+const telemetry = SvanticTelemetry.init({
+    service_name: 'billing-service',
+    export: {
+        endpoint: 'http://otel-collector:4318/v1/traces',
+        protocol: 'otlp',
+        auth: { type: 'bearer', token: 'my-token' },
+    },
+});
+```
+
+```typescript Console (development)
+import { SvanticTelemetry } from '@svantic/telemetry';
+
+const telemetry = SvanticTelemetry.init({
+    service_name: 'dev-agent',
+    export: { type: 'console' },
+});
+```
+
+</CodeGroup>
+
+## Init options
+
+`SvanticTelemetry.init()` accepts a `TelemetryInitOptions` object.
+
+<ParamField body="service_name" type="string" required>
+  Identifies this process in traces. Stamped onto every span. Use a short, stable name like `"my-agent"` or `"billing-service"`.
+</ParamField>
+
+<ParamField body="export" type="ExportConfig" required>
+  Controls the export destination. See [export config](#export-config) below.
+</ParamField>
+
+<ParamField body="service_version" type="string">
+  Optional service version string (e.g. `"1.2.0"`). Attached to span metadata.
+</ParamField>
+
+<ParamField body="instance_id" type="string">
+  Unique identifier for this process instance (e.g. pod name or container ID). Useful for correlating spans from a specific replica.
+</ParamField>
+
+<ParamField body="flush_interval_ms" type="number" default="5000">
+  How often (in milliseconds) the internal buffer is flushed to the exporter. The flush timer is unref'd so it does not prevent process exit.
+</ParamField>
+
+<ParamField body="max_buffer_size" type="number" default="100">
+  Maximum number of combined spans, usage records, and events buffered before a force-flush is triggered.
+</ParamField>
+
+### Export config
+
+The `export` field is a discriminated union. Use one of the three shapes:
+
+<AccordionGroup>
+
+<Accordion title="Svantic Mesh (default protocol)">
+
+Send spans to a running Svantic mesh instance via HTTP POST to `/telemetry/otlp`.
+
+```typescript
+export: {
+    endpoint: 'http://localhost:7001/telemetry/otlp',
+    auth: { type: 'api_key', key: 'your-tenant-secret' },
+    // protocol: 'svantic' is the default and can be omitted
+}
+```
+
+Uses `MeshSpanExporter` under the hood.
+
+</Accordion>
+
+<Accordion title="OTLP collector">
+
+Route spans to any OpenTelemetry-compatible backend — Jaeger, Grafana Tempo, Datadog, etc. Requires the `@opentelemetry/exporter-trace-otlp-http` peer dependency.
+
+```typescript
+export: {
+    endpoint: 'http://otel-collector:4318/v1/traces',
+    protocol: 'otlp',
+    auth: { type: 'bearer', token: 'my-token' },
+}
+```
+
+Uses `OtlpExporterWrapper` under the hood.
+
+</Accordion>
+
+<Accordion title="Console (development)">
+
+Print spans to stdout. No auth or endpoint required.
+
+```typescript
+export: { type: 'console' }
+```
+
+Uses `ConsoleExporter` under the hood. Not for production.
+
+</Accordion>
+
+</AccordionGroup>
+
+## Authentication
+
+Auth is configured via the `auth` field inside your `export` config. The resolved provider attaches headers to every export HTTP request.
+
+| Type | Config | Header sent |
+|------|--------|-------------|
+| `api_key` | `{ type: 'api_key', key: 'secret' }` | `X-API-Key: secret` |
+| `bearer` | `{ type: 'bearer', token: 'jwt', refresh?: () => Promise<string> }` | `Authorization: Bearer jwt` |
+| `custom` | `{ type: 'custom', get_headers: () => Record<string, string> }` | Whatever `get_headers()` returns |
+| `none` | `{ type: 'none' }` | No auth headers |
+
+The `bearer` type accepts an optional `refresh` callback. When present, the `BearerAuth` provider can call it to obtain a fresh token.
+
+## Subpath exports
+
+The package ships five subpath exports. Import only what you need.
+
+| Import path | Exports |
+|-------------|---------|
+| `@svantic/telemetry` | `SvanticTelemetry`, `SvanticTracer` |
+| `@svantic/telemetry/auth` | `ApiKeyAuth`, `BearerAuth`, `CustomAuth` |
+| `@svantic/telemetry/propagation` | `ContextInjector`, `ContextExtractor`, `BAGGAGE_KEYS` |
+| `@svantic/telemetry/exporters` | `MeshSpanExporter`, `OtlpExporterWrapper`, `ConsoleExporter`, `NoopExporter` |
+| `@svantic/telemetry/instrumentations` | `LlmInstrumentation`, `A2aInstrumentation`, `ToolInstrumentation` |
+
+<Note>
+  `@svantic/telemetry` is at the bottom of the dependency graph. It has no dependency on `@svantic/sdk` or any Svantic service, making it safe to use in third-party agents and standalone microservices.
+</Note>
+
+## Shutdown
+
+Always call `shutdown()` before your process exits. It stops the flush timer, drains buffered spans and usage records, and gracefully shuts down the exporter. The method is idempotent — calling it twice is safe.
+
+```typescript
+await telemetry.shutdown();
+```
+
+<Warning>
+  Skipping `shutdown()` can cause the last batch of spans to be lost. In short-lived scripts, call it explicitly before `process.exit()`.
+</Warning>

@@ -1,0 +1,137 @@
+---
+title: "Security Policies and Access Control in Svantic"
+description: "Configure guard policies to control agent admission, restrict tool use, cap session limits, and manage role-based access and API key scopes across your tenant."
+---
+
+Svantic gives you layered controls to define exactly what agents can do within your deployment. Guard policies set the rules; authentication events and policy decisions are recorded in an audit trail you can inspect at any time.
+
+---
+
+## Guard policies
+
+Guard policies are tenant-scoped rules that Svantic evaluates before allowing certain operations. There are five policy scopes, each covering a different phase of agent activity.
+
+<CardGroup cols={2}>
+  <Card title="Admission" icon="door-open">
+    Controls which agent types are allowed to join sessions for your tenant. Use admission policies to whitelist specific agents or block untrusted ones entirely.
+  </Card>
+  <Card title="Tool" icon="wrench">
+    Restricts which tools and capabilities registered agents can invoke. Use tool policies to prevent agents from calling sensitive functions without explicit approval.
+  </Card>
+  <Card title="Plan" icon="list-check">
+    Evaluates agent-generated plans before execution begins. Use plan policies to block or require approval for plans that exceed defined scope.
+  </Card>
+  <Card title="Session" icon="clock">
+    Sets limits on session duration and message count. Use session policies to enforce cost controls and prevent runaway sessions.
+  </Card>
+  <Card title="Dispatch" icon="paper-plane">
+    Controls which agents can be dynamically recruited into a session by the orchestrator. Use dispatch policies to limit lateral movement between agent types.
+  </Card>
+</CardGroup>
+
+### Policy decisions
+
+Each policy you create specifies a **decision** for matching requests:
+
+| Decision | Behaviour |
+|---|---|
+| `allow` | Permit the operation immediately |
+| `deny` | Block the operation and record a denial event |
+| `approval_required` | Pause the operation and wait for a human approver to permit or reject it |
+
+### Approval queue
+
+When a policy requires approval, the pending request appears in the **Approval Queue** on the Security page. The queue shows the requesting agent, the tool or action that needs approval, the session ID, and the reason the policy requires review. Approve or deny each request directly from the queue.
+
+---
+
+## Managing policies in the dashboard
+
+<Steps>
+  <Step title="Navigate to Security settings">
+    Go to **Settings → Security** in the Svantic dashboard. This page shows the current security posture (authentication rates, guard decision rates) and the policy management interface.
+  </Step>
+  <Step title="Select a policy scope">
+    Filter the policy list by scope (admission, tool, plan, session, or dispatch) to see the rules that apply to that phase of agent activity.
+  </Step>
+  <Step title="Create a policy">
+    Click **Create Policy** and fill in the form:
+    - **Name** — a descriptive label for the policy.
+    - **Scope** — the phase this policy applies to (cannot be changed after creation).
+    - **Decision** — `allow`, `deny`, or `approval_required`.
+    - **Match** — an optional filter object that constrains which requests the policy applies to (for example, matching a specific agent type or tool name).
+    - **Description** and **Reason** — optional explanatory text surfaced in audit events and the approval queue.
+    - **Priority** — lower numbers take precedence when multiple policies match the same request.
+    - **Enabled** — toggle a policy on or off without deleting it.
+  </Step>
+  <Step title="Test your policies">
+    Use the Security page's audit trail to verify that policies are firing as expected. The **Decisions by Policy** chart shows allowed, denied, and approval-required counts per policy so you can confirm that new rules are matching traffic.
+  </Step>
+</Steps>
+
+<Warning>
+Scope is immutable once a policy is created. If you need to change the scope, delete the existing policy and create a new one.
+</Warning>
+
+---
+
+## Security monitoring
+
+The Security page provides real-time visibility into authentication and guard activity.
+
+### KPI cards
+
+| Metric | Description |
+|---|---|
+| Total Auth Events | Authentication attempts (token issuances and rejections) |
+| Rejection Rate | Percentage of authentication attempts that were rejected |
+| Total Guard Events | Tool calls, plan evaluations, and dispatches evaluated by policies |
+| Denial Rate | Percentage of guard decisions that resulted in a denial |
+
+<Note>
+A rejection rate or denial rate above 10% turns the corresponding KPI card red. Investigate whether legitimate traffic is being blocked by an overly restrictive policy.
+</Note>
+
+### Charts
+
+- **Security Events Timeline** — a stacked area chart showing authentication events and guard decisions over the last 30 minutes.
+- **Authentication donut** — issued versus rejected tokens with a total count in the centre.
+- **Guard Decisions donut** — allowed, denied, and approval-pending counts.
+- **Top Denied Agents** — a horizontal bar chart ranking agents by denial count, useful for identifying agents attempting operations outside their permitted scope.
+- **Decisions by Policy** — a stacked bar chart showing how each policy contributed to allow, deny, and approval decisions.
+- **Resource Budgets** — progress bars showing usage against defined resource budgets (for example, token quotas) reported in guard events.
+
+### Audit trail
+
+The audit trail at the bottom of the Security page shows a chronological feed of all authentication and guard events. Use the **All / Auth / Guard** toggle to filter by event category. Each event is displayed with its type, source, session context, and timestamp.
+
+---
+
+## Role-based access
+
+Svantic supports two roles for dashboard users:
+
+| Role | Permissions |
+|---|---|
+| **Admin** | Full access to all dashboard sections including security settings, API key management, policy creation, and tenant configuration |
+| **Member** | Access to monitoring sections (Overview, Sessions, Agents, Traces, Usage) but not settings or security configuration |
+
+Assign the admin role sparingly. Most team members who need to monitor deployments should use the member role.
+
+---
+
+## API key scopes for least-privilege access
+
+API keys provide programmatic access to the Svantic gateway. Assign the minimum scope required for each integration:
+
+| Scope | Suitable for |
+|---|---|
+| `read` | Monitoring integrations, dashboards, read-only analytics pipelines |
+| `full` | Orchestration services, agent frameworks, applications that create or manage sessions |
+| `admin` | Key management automation, privileged operator scripts |
+
+See [Manage API Keys](/platform/api-keys) for instructions on creating, rotating, and revoking keys.
+
+<Tip>
+Create a separate API key for each service or deployment rather than sharing one key across multiple systems. This limits the blast radius if a key is compromised and makes it straightforward to revoke access for a specific service.
+</Tip>

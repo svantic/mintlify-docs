@@ -1,0 +1,131 @@
+{
+  "projectType": "saas",
+  "projectName": "Svantic",
+  "projectDescription": "The enterprise AI agent platform for building, deploying, and orchestrating A2A-compliant agents with real-time observability, multi-tenancy, and built-in integrations.",
+  "theme": "luma",
+  "primaryColor": "#040404",
+  "lightColor": "#7c7c7c",
+  "darkColor": "#c3c3c3",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Docs",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "authentication"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/agents",
+              "concepts/sessions",
+              "concepts/tenants",
+              "concepts/telemetry"
+            ]
+          },
+          {
+            "group": "Building Agents",
+            "pages": [
+              "guides/build-agent",
+              "guides/capabilities",
+              "guides/mcp-tools",
+              "guides/connect-mesh"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/webhooks",
+              "integrations/builtin-tools",
+              "integrations/knowledge-base"
+            ]
+          },
+          {
+            "group": "Platform",
+            "pages": [
+              "platform/dashboard",
+              "platform/api-keys",
+              "platform/alerts",
+              "platform/security"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "SDK Reference",
+        "groups": [
+          {
+            "group": "@svantic/sdk",
+            "pages": [
+              "sdk/overview",
+              "sdk/agent",
+              "sdk/remote-agent",
+              "sdk/mesh-connector",
+              "sdk/tools"
+            ]
+          },
+          {
+            "group": "@svantic/telemetry",
+            "pages": [
+              "telemetry/overview",
+              "telemetry/tracing",
+              "telemetry/propagation"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "cli/overview",
+              "cli/commands"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "A2A-compliant agent framework with capability-based routing",
+    "Multi-tenant architecture with organization isolation",
+    "Real-time session orchestration and agent coordination",
+    "Distributed tracing with W3C Trace Context and OpenTelemetry",
+    "Built-in webhook integrations (GitHub, Jira, Slack, Datadog, Zendesk, Bitbucket)",
+    "Knowledge base with vector search and RAG (Cortex service)",
+    "Dashboard with live session streaming, usage metrics, and alert rules",
+    "MCP (Model Context Protocol) bridge for tool integration",
+    "API key management with scoped access control",
+    "Guard policies for admission control, tool usage, and session limits"
+  ],
+  "publicApiSurface": [
+    "POST /auth/get_token — exchange client credentials for a JWT",
+    "POST /auth/login — email/password login",
+    "POST /auth/signup — create user account",
+    "POST /agents/register — register an agent with the gateway",
+    "POST /agents/deregister — deregister an agent",
+    "POST /agents/heartbeat — send agent heartbeat",
+    "POST /webhooks/receive — inbound webhook from external services",
+    "POST /sessions/init — create a new session (mesh)",
+    "POST /sessions/close — close a session (mesh)",
+    "POST /sessions/interrupt — interrupt in-flight session streams",
+    "POST /telemetry/report — batch telemetry ingest (spans, usage, events)",
+    "POST /telemetry/otlp — OTLP-format telemetry ingest",
+    "Agent.define_capability(config) — register a capability on an agent",
+    "Agent.expose(app, endpoint_path?) — mount A2A endpoints on Express",
+    "Agent.register_mcp(server_name, config) — bridge MCP server tools as capabilities",
+    "MeshConnector.connect() — register agent and authenticate with mesh",
+    "MeshConnector.disconnect() — deregister agent from gateway",
+    "RemoteAgent — send tasks and stream responses from any A2A agent",
+    "AgentDiscovery — discover agents by fetching their agent cards",
+    "SvanticTelemetry.init(options) — initialize OTEL-based telemetry",
+    "SvanticTracer.start_span / start_llm_span / start_tool_span — span creation",
+    "ContextInjector.inject / ContextExtractor.extract — W3C trace context propagation",
+    "svantic status — check gateway and mesh health",
+    "svantic agents list — list registered agents",
+    "svantic sessions list — list recent sessions",
+    "svantic tenants list — list tenants"
+  ]
+}

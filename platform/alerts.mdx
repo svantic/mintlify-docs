@@ -1,0 +1,116 @@
+---
+title: "Configure Alert Rules in Svantic"
+description: "Set up alert rules that fire in-app notifications or webhook deliveries when session failures, token thresholds, agent offline events, or custom conditions occur."
+---
+
+Alert rules let you define conditions that, when matched by platform events, trigger notifications. You can use them to get alerted when sessions start failing, token consumption crosses a budget threshold, an agent goes offline, or any other event pattern you care about. Notifications are delivered in-app, via webhook, or both.
+
+---
+
+## How alert rules work
+
+Each rule watches for a specific **event type pattern** on the platform event bus. When an event matches the pattern, the rule checks whether the optional **threshold** has been crossed within a rolling **time window**. If it has — or if there is no threshold and the event simply occurred — the rule fires and delivers a notification to the configured destinations.
+
+A **cooldown** period prevents the same rule from firing repeatedly in quick succession. After a rule triggers, it will not fire again until the cooldown expires.
+
+---
+
+## Alert rule components
+
+| Field | Description |
+|---|---|
+| **Name** | A human-readable label for the rule (for example, `High session failure rate`) |
+| **Event type pattern** | The event type to match, such as `session.failed` or `agent.*` (wildcards supported) |
+| **Severity** | `info`, `warning`, or `critical` — controls how the notification is displayed |
+| **Threshold** | Optional — fire only after this many matching events occur |
+| **Window** | Required if a threshold is set — the rolling time window in seconds over which events are counted |
+| **Actions** | Where to send the notification: `in_app`, `webhook`, or both |
+| **Cooldown** | Seconds to wait before the rule can fire again (default 300s) |
+
+### Common event type patterns
+
+| Pattern | When it fires |
+|---|---|
+| `session.failed` | A session ended in a failure state |
+| `agent.offline` | An agent instance stopped responding |
+| `guard.denied` | A tool call or action was blocked by a guard policy |
+| `auth.token_rejected` | An authentication attempt was rejected |
+| `dispatch.failed` | The platform failed to route a message to an agent |
+| `agent.*` | Any event emitted by an agent |
+
+<Tip>
+Use a threshold with a window to avoid alert fatigue. For example, set threshold `5` and window `60` to fire only when 5 or more session failures occur within 60 seconds, rather than alerting on every individual failure.
+</Tip>
+
+---
+
+## Creating an alert rule
+
+<Steps>
+  <Step title="Navigate to Alert Rules">
+    In the dashboard, go to **Settings → Alert Rules**.
+  </Step>
+  <Step title="Click Create Rule">
+    Click **Create Rule** in the top-right corner of the page.
+  </Step>
+  <Step title="Fill in the rule form">
+    - Enter a descriptive **Name**.
+    - Set the **Event type pattern** — for example, `session.failed` or `guard.denied`.
+    - Choose a **Severity**: `info`, `warning`, or `critical`.
+    - Optionally set a **Threshold** (number of events) and a **Window** (seconds). Leave blank to fire on every matching event.
+    - Select one or both **Actions**: `In-app` and/or `Webhook`.
+    - Set a **Cooldown** in seconds (default is 300 seconds / 5 minutes).
+  </Step>
+  <Step title="Save the rule">
+    Click **Save**. The rule appears in the rules table and becomes active immediately.
+  </Step>
+</Steps>
+
+---
+
+## Editing and disabling rules
+
+You can edit any rule by clicking the **Edit** (pencil) icon on its row. All fields are editable except scope.
+
+Each rule has an **Enabled** toggle on its row. Disable a rule to pause it without deleting it — useful for suppressing noisy rules during a maintenance window or investigation.
+
+---
+
+## Deleting a rule
+
+Click the **Delete** (trash) icon on a rule row and confirm the action. Deletion is permanent and cannot be undone.
+
+---
+
+## Notification delivery
+
+### In-app notifications
+
+When a rule fires with the `in_app` action, a notification appears in the in-app notification centre (the bell icon in the dashboard header). Notifications are colour-coded by severity: blue for `info`, amber for `warning`, and red for `critical`.
+
+### Webhook delivery
+
+When a rule fires with the `webhook` action, Svantic sends an HTTP POST to every registered webhook endpoint. You must register at least one webhook endpoint in **Settings → Webhooks** before webhook delivery will work.
+
+See [Webhooks](/platform/dashboard#webhooks) for instructions on registering and testing webhook endpoints.
+
+<Note>
+If a rule has the `webhook` action but no webhook endpoints are registered, the notification is silently dropped. Configure at least one endpoint before relying on webhook delivery for critical alerts.
+</Note>
+
+---
+
+## Alert delivery log
+
+The Webhooks page records a delivery log for each endpoint showing the last 20 delivery attempts — including whether the request succeeded, the HTTP status code returned, the response time, and any error message. Use this log to diagnose failed deliveries.
+
+---
+
+## Viewing rule analytics
+
+The Alert Rules page surfaces two charts when at least one rule exists:
+
+- **Severity Distribution** — a donut showing how many rules are configured at each severity level.
+- **Recently Triggered Rules** — a horizontal bar chart showing the rules that fired most recently, with time-since-last-trigger on the x-axis. Rules that have never fired do not appear.
+
+These charts help you identify over-firing rules (high frequency of triggers) or rules that may be misconfigured (never triggered despite expected conditions).

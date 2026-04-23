@@ -1,0 +1,271 @@
+---
+title: "Svantic Dashboard: Monitor Agents and Sessions"
+description: "A guide to every section of the Svantic web dashboard — Overview, Sessions, Agents, Traces, Usage, Knowledge, Webhooks, and the Live Stream."
+---
+
+The Svantic dashboard is your central control plane for monitoring AI agent activity, diagnosing issues, and managing platform resources. Every section updates in real time so you always see an accurate picture of what is happening across your deployment.
+
+## Overview
+
+The Overview page gives you an at-a-glance health check of the entire platform. It loads automatically when you open the dashboard and refreshes every 12 seconds.
+
+<CardGroup cols={4}>
+  <Card title="Events" icon="bolt">
+    Total platform events processed since startup. Click to jump to the Sessions list.
+  </Card>
+  <Card title="Sessions" icon="comments">
+    Total conversation sessions, both active and completed.
+  </Card>
+  <Card title="Agents" icon="robot">
+    Number of registered agent types across all tenants.
+  </Card>
+  <Card title="Traces" icon="diagram-project">
+    Total distributed traces recorded. Click to open the Trace Explorer.
+  </Card>
+  <Card title="Tokens" icon="coin">
+    Cumulative token consumption. Click to open the Usage page.
+  </Card>
+  <Card title="Error Rate" icon="triangle-exclamation">
+    Percentage of traces that ended in error. Turns red above 5%.
+  </Card>
+  <Card title="Avg Latency" icon="clock">
+    Mean trace duration across all completed traces.
+  </Card>
+  <Card title="P95" icon="gauge-high">
+    95th-percentile trace duration — a reliable indicator of tail latency.
+  </Card>
+</CardGroup>
+
+Below the KPI strip, the Overview surfaces several charts:
+
+- **Throughput gauge** — events per minute over the last 60 seconds.
+- **Error rate gauge** — color-coded green, amber, or red based on threshold.
+- **Agent Map** — a treemap showing every registered agent type, sized by active session count. Click any cell to open the Agents page.
+- **Latency Heatmap** — trace duration bucketed by time window (last 60 minutes) so you can spot latency spikes quickly.
+- **Token Distribution** — a treemap showing token consumption broken down by agent type over the last 24 hours.
+- **Event Activity** — a live area chart of platform event rate over the last 5 minutes.
+- **By Category** — a horizontal bar breakdown of events by category (auth, guard, message, and so on).
+- **Tool Calls** — a stacked bar showing which tools were invoked and how many calls were allowed versus denied.
+- **Error Breakdown** — a donut showing the distribution of error event types.
+
+The page also displays a compact agent table with status, instance count, capabilities, and active session count, and a **Recent Activity** feed showing the last 20 platform events.
+
+---
+
+## Sessions
+
+The Sessions page lists every conversation session recorded by the platform, with server-side pagination and real-time status.
+
+Each row shows:
+
+| Column | Description |
+|---|---|
+| Agent Flow | The chain of agents participating in the session |
+| Session ID | Unique identifier (monospace, truncated) |
+| Tenant | Tenant the session belongs to |
+| Turns | Number of completed conversation turns |
+| Agents | Total agent count; remote agents shown with an `r` badge |
+| Status | `active`, `completed`, `expired`, or `idle` |
+| Last Active | Time since the most recent event |
+
+**Filtering and search** — use the status toggle (`All`, `Active`, `Completed`) to narrow the list, or type in the search field to match against session ID, tenant, user ID, or agent type.
+
+### Session detail drawer
+
+Click any row to open a slide-over panel with four tabs:
+
+<AccordionGroup>
+  <Accordion title="Agents">
+    Lists every agent bound to the session, with type (built-in vs remote), join reason (`auto`, `self`, `invited`, `routed`), and join time.
+  </Accordion>
+  <Accordion title="Conversation">
+    Shows the full conversation history — user messages paired with assistant responses. Live turns stream in as they complete. Each turn optionally displays token usage and tool call badges.
+  </Accordion>
+  <Accordion title="Activity">
+    All non-message events for this session (guard decisions, agent joins, tool calls, errors), merged from the historical event buffer and the live SSE stream.
+  </Accordion>
+  <Accordion title="Traces">
+    Distributed traces scoped to this session. Each trace shows its ID, root agent, span count, duration, and status. Expand a trace to see the full waterfall view.
+  </Accordion>
+</AccordionGroup>
+
+The Sessions page also surfaces three analytics charts: a **Session Activity** area chart showing session creation rate over time, an **Agent Distribution** donut showing which agent types appeared most, and a **Duration Distribution** histogram bucketed from under a minute to over an hour.
+
+---
+
+## Agents
+
+The Agents page gives you an inventory of every agent registered with the platform and live health data for each instance.
+
+<CardGroup cols={2}>
+  <Card title="Agent types" icon="layer-group">
+    Total number of distinct agent types registered across all tenants.
+  </Card>
+  <Card title="Total instances" icon="server">
+    Total number of remote agent process instances currently registered.
+  </Card>
+  <Card title="Active sessions" icon="signal">
+    Sessions actively using at least one agent instance right now.
+  </Card>
+  <Card title="Healthy / Unhealthy" icon="heart-pulse">
+    Healthy instance count versus unhealthy. Turns red if any instance is unhealthy.
+  </Card>
+</CardGroup>
+
+**Instance Host Map** — a hexagonal grid (inspired by Datadog's host map) where each cell represents one agent instance. Cell color indicates status:
+
+- Green — available
+- Amber — busy
+- Red — unhealthy or offline
+- Grey — draining
+
+Hover a cell to see the instance ID, status, and current session count. Click a cell to open the agent detail drawer.
+
+**Status Distribution donut** — shows the proportion of instances in each status state at a glance.
+
+### List and card views
+
+Toggle between a dense list view and a card grid using the view switcher in the top-right corner. Built-in (core) agents appear in a collapsible section above remote agents.
+
+### Agent detail drawer
+
+Click any agent row or card to open a four-tab slide-over:
+
+<AccordionGroup>
+  <Accordion title="Overview">
+    Description, publisher, version, sub-agents it orchestrates, and capability tags.
+  </Accordion>
+  <Accordion title="Capabilities">
+    All declared skills with names, descriptions, and tags.
+  </Accordion>
+  <Accordion title="Instances">
+    Each running instance with status, tenant, current vs max session load (shown as a progress bar), consecutive failure count, and endpoint URL. You can also drain an instance from here to gracefully stop new sessions being routed to it.
+  </Accordion>
+  <Accordion title="Sessions">
+    Active sessions this agent type is participating in. Click a row to jump to the session detail.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Traces
+
+The Traces page is a full APM-style distributed trace explorer. It auto-refreshes every 8 seconds.
+
+### KPI strip
+
+| Metric | Description |
+|---|---|
+| Total Traces | Traces recorded in the selected time range |
+| Avg Latency | Mean duration of completed traces |
+| P50 / P95 / P99 | Latency percentiles |
+| Error Rate | Percentage of traces with error status; red above 5% |
+| Running | Traces that have not yet completed |
+
+### Time range selector
+
+Filter traces to the last 5 minutes, 15 minutes, 1 hour, 6 hours, 24 hours, or all time using the toggle bar in the header.
+
+### Charts
+
+- **Latency Distribution** — a histogram of trace durations across bucketed ranges.
+- **Error Rate Over Time** — an area chart showing error rate trends so you can correlate spikes with deployments or load.
+
+### Trace list
+
+The table is sortable by start time, duration, and span count. Each row shows the trace ID, root agent, session, tenant, span count, duration (with a proportional mini-bar), status badge, and relative start time.
+
+Click any row to expand an inline **trace detail panel** with four sub-views:
+
+<AccordionGroup>
+  <Accordion title="Waterfall">
+    A Gantt-style timeline showing every span in parent-child order with start offset and duration bars.
+  </Accordion>
+  <Accordion title="Flame chart">
+    A flame-graph view for visualising where time is spent across the span hierarchy.
+  </Accordion>
+  <Accordion title="Service map">
+    A graph showing which agents called which other agents within this trace.
+  </Accordion>
+  <Accordion title="Metadata">
+    Raw span attributes, status codes, and any error messages attached to each span.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Usage
+
+The Usage page tracks token consumption across your tenant, broken down by model, agent, and session. Use the time range selector in the header to view the last 24 hours, 7 days, or 30 days.
+
+**KPI cards:**
+
+| Card | Description |
+|---|---|
+| Total Tokens | Combined input and output tokens for the period |
+| Input Tokens | Tokens sent to the model (prompts, context) |
+| Output Tokens | Tokens generated by the model (responses) |
+| Models Active | Number of distinct models used; also shows session count |
+| Est. Cost | Cost estimate based on published model pricing |
+
+<Note>
+Cost estimates are calculated from public Gemini API pricing tiers. Your actual invoice may differ depending on your billing arrangement.
+</Note>
+
+Below the KPI cards you'll find:
+
+- **Tokens Over Time** — a stacked area chart with one series per model, so you can see which models are driving consumption growth.
+- **Input / Output Split** — a donut showing the ratio of prompt tokens to completion tokens.
+- **Cost by Model** — a donut and breakdown table showing estimated spend per model.
+- **Tokens by Model** — a horizontal bar chart ranking models by total token count.
+- **Tokens by Agent** — a bar chart with model sub-breakdown chips, showing which agents are the heaviest consumers.
+- **Tokens by Tenant** — visible when multiple tenants are present, showing per-tenant consumption.
+- **Per-Session Tokens** — a paginated table listing sessions sorted by token count, with input/output split and turn count.
+
+---
+
+## Knowledge
+
+The Knowledge page manages the documents and files used for retrieval-augmented generation (RAG) across your agents.
+
+The file list shows each document's ID and chunk count. The **Chunk Distribution** bar chart ranks files by chunk count so you can see which documents contribute most context.
+
+Use the **Regenerate Embeddings** button to reprocess all files and rebuild the vector index. The button shows a result banner with the number of files processed and total chunks generated.
+
+**Test Query** — enter a free-text query and click **Query** to retrieve the top matching chunks from your knowledge base. This lets you verify that retrieval is working as expected before deploying changes to your agents.
+
+---
+
+## Webhooks
+
+The Webhooks page manages outbound HTTP endpoints that receive alert payloads when alert rules fire.
+
+<Steps>
+  <Step title="Add a webhook">
+    Enter the endpoint URL in the **Add Webhook** field and click **Test & Save**. Svantic registers the endpoint and immediately sends a test delivery to confirm reachability. The result shows the HTTP status code and response time.
+  </Step>
+  <Step title="View delivery status">
+    Each registered webhook shows its last delivery status (Success or Failed) and the time of the last delivery attempt.
+  </Step>
+  <Step title="Inspect delivery logs">
+    Click **Show deliveries** on any webhook row to expand the last 20 delivery log entries, including timestamp, HTTP status code, response time, and any error messages.
+  </Step>
+  <Step title="Test on demand">
+    Click **Test** on any webhook to send a new test payload and immediately see the result.
+  </Step>
+  <Step title="Remove a webhook">
+    Click the delete icon and confirm. The endpoint will no longer receive any alert deliveries.
+  </Step>
+</Steps>
+
+The delivery status strip at the top of the page summarises total endpoints, successful last deliveries, and failed last deliveries across all registered webhooks.
+
+---
+
+## Live Stream
+
+The Live Stream section provides a real-time event feed for active sessions. Events appear as they are emitted by the platform, making it useful for debugging agent behaviour during development or incident investigation.
+
+## Notifications
+
+The in-app notification centre collects alerts fired by your alert rules and surfaces them inside the dashboard. Notifications are delivered without requiring any webhook configuration. See [Alert Rules](/platform/alerts) for how to configure which conditions trigger notifications.

@@ -1,0 +1,362 @@
+---
+title: "Built-in Tool Integrations for Svantic Agents"
+description: "Load pre-built GitHub, JIRA, Slack, Bitbucket, Zendesk, Datadog, and shell tools into your agents using BuiltinToolLoader from the Svantic SDK."
+---
+
+The Svantic SDK ships with a library of ready-made tools for common enterprise integrations. Instead of writing API clients from scratch, you use `BuiltinToolLoader` to load an entire domain's tools in one call and register them with your agent. This page covers every available tool, its parameters, and how to configure the credentials each one needs.
+
+## Loading tools with BuiltinToolLoader
+
+`BuiltinToolLoader` is the single entry point for all built-in tools. Import it from `@svantic/sdk/tools`, create an instance, and call `load_domain()` with the name of the integration you want.
+
+```typescript
+import { Agent, BuiltinToolLoader } from '@svantic/sdk';
+
+const agent = new Agent({ name: 'ops-agent', description: 'Operations agent.', url: 'http://localhost:4000' });
+const loader = new BuiltinToolLoader();
+
+// Load tools for a single domain
+const { tools, loaded, errors } = await loader.load_domain('github');
+
+for (const tool of tools) {
+  agent.define_capability({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    handler: async (args) => tool.handler(args),
+  });
+}
+```
+
+If you want tools from several domains at once, use `load_domains()`:
+
+```typescript
+const { tools } = await loader.load_domains(['github', 'jira', 'slack']);
+
+for (const tool of tools) {
+  agent.define_capability({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    handler: async (args) => tool.handler(args),
+  });
+}
+```
+
+To load every built-in tool across all domains, use `load_all()`:
+
+```typescript
+const { tools, loaded, errors } = await loader.load_all();
+```
+
+The result object always contains:
+
+| Field    | Type       | Description                                           |
+| -------- | ---------- | ----------------------------------------------------- |
+| `tools`  | `array`    | Tool definitions ready to pass to `registry.add_tool` |
+| `loaded` | `string[]` | Names of tools that loaded successfully               |
+| `errors` | `string[]` | Any tools that failed to load, with the reason        |
+
+<Note>
+Always check the `errors` array after loading. A missing environment variable causes the tool to load but return an error when the agent calls it. Catching load errors early is easier than debugging a failed agent run.
+</Note>
+
+## GitHub
+
+The GitHub domain provides tools for pull request management and code review. All tools require a `GITHUB_TOKEN` environment variable set to a Personal Access Token (classic) or a fine-grained token with `repo` scope.
+
+```bash
+GITHUB_TOKEN=ghp_your_token_here
+```
+
+### Loading GitHub tools
+
+```typescript
+const { tools } = await loader.load_domain('github');
+```
+
+### Available tools
+
+<AccordionGroup>
+  <Accordion title="github_list_prs">
+    Lists open pull requests for a repository. Returns the PR number, title, author, head and base branches, URL, and creation date.
+
+    | Parameter | Type     | Required | Description                                                             |
+    | --------- | -------- | -------- | ----------------------------------------------------------------------- |
+    | `repo`    | `string` | Yes      | Repository in `owner/name` format, e.g. `"acme/backend"`               |
+    | `state`   | `string` | No       | Filter by state: `open`, `closed`, or `all`. Defaults to `open`.        |
+    | `limit`   | `number` | No       | Maximum results to return. Defaults to `10`.                            |
+  </Accordion>
+  <Accordion title="github_get_pr">
+    Fetches full details for a single pull request by number, including description, reviewers, and merge status.
+
+    | Parameter | Type     | Required | Description                       |
+    | --------- | -------- | -------- | --------------------------------- |
+    | `repo`    | `string` | Yes      | Repository in `owner/name` format |
+    | `pr`      | `number` | Yes      | Pull request number               |
+  </Accordion>
+  <Accordion title="github_get_pr_diff">
+    Returns the unified diff for a pull request. Useful when you want an agent to review code changes.
+
+    | Parameter | Type     | Required | Description                       |
+    | --------- | -------- | -------- | --------------------------------- |
+    | `repo`    | `string` | Yes      | Repository in `owner/name` format |
+    | `pr`      | `number` | Yes      | Pull request number               |
+  </Accordion>
+  <Accordion title="github_create_pr">
+    Creates a new pull request.
+
+    | Parameter | Type     | Required | Description                                   |
+    | --------- | -------- | -------- | --------------------------------------------- |
+    | `repo`    | `string` | Yes      | Repository in `owner/name` format             |
+    | `title`   | `string` | Yes      | Pull request title                            |
+    | `head`    | `string` | Yes      | Branch to merge from                          |
+    | `base`    | `string` | Yes      | Branch to merge into                          |
+    | `body`    | `string` | No       | Pull request description (markdown supported) |
+  </Accordion>
+  <Accordion title="github_post_review">
+    Posts a review comment on a pull request. Supports `APPROVE`, `REQUEST_CHANGES`, and `COMMENT` events.
+
+    | Parameter | Type     | Required | Description                                                       |
+    | --------- | -------- | -------- | ----------------------------------------------------------------- |
+    | `repo`    | `string` | Yes      | Repository in `owner/name` format                                 |
+    | `pr`      | `number` | Yes      | Pull request number                                               |
+    | `body`    | `string` | Yes      | Review comment text                                               |
+    | `event`   | `string` | Yes      | Review action: `APPROVE`, `REQUEST_CHANGES`, or `COMMENT`         |
+  </Accordion>
+  <Accordion title="github_merge_pr">
+    Merges a pull request. Supports `merge`, `squash`, and `rebase` merge methods.
+
+    | Parameter      | Type     | Required | Description                                                |
+    | -------------- | -------- | -------- | ---------------------------------------------------------- |
+    | `repo`         | `string` | Yes      | Repository in `owner/name` format                          |
+    | `pr`           | `number` | Yes      | Pull request number                                        |
+    | `merge_method` | `string` | No       | `merge`, `squash`, or `rebase`. Defaults to `merge`.       |
+  </Accordion>
+</AccordionGroup>
+
+## JIRA
+
+The JIRA domain provides tools for issue management. All tools require three environment variables pointing to your JIRA Cloud instance:
+
+```bash
+JIRA_BASE_URL=https://your-org.atlassian.net
+JIRA_EMAIL=bot@your-org.com
+JIRA_API_TOKEN=your_api_token
+```
+
+### Loading JIRA tools
+
+```typescript
+const { tools } = await loader.load_domain('jira');
+```
+
+### Available tools
+
+<AccordionGroup>
+  <Accordion title="jira_get_issue">
+    Fetches full details for a JIRA issue. Returns summary, status, assignee, reporter, priority, issue type, labels, description, and timestamps.
+
+    | Parameter   | Type     | Required | Description                         |
+    | ----------- | -------- | -------- | ----------------------------------- |
+    | `issue_key` | `string` | Yes      | JIRA issue key, e.g. `"PROJ-123"`   |
+  </Accordion>
+  <Accordion title="jira_create_issue">
+    Creates a new JIRA issue in a project.
+
+    | Parameter      | Type     | Required | Description                                  |
+    | -------------- | -------- | -------- | -------------------------------------------- |
+    | `project_key`  | `string` | Yes      | JIRA project key, e.g. `"BACKEND"`           |
+    | `summary`      | `string` | Yes      | Issue title                                  |
+    | `issue_type`   | `string` | Yes      | Issue type, e.g. `"Bug"` or `"Story"`        |
+    | `description`  | `string` | No       | Issue description                            |
+    | `assignee`     | `string` | No       | Assignee account ID                          |
+    | `labels`       | `array`  | No       | Labels to apply                              |
+  </Accordion>
+  <Accordion title="jira_transition_issue">
+    Moves an issue to a new status by executing a workflow transition.
+
+    | Parameter       | Type     | Required | Description                                              |
+    | --------------- | -------- | -------- | -------------------------------------------------------- |
+    | `issue_key`     | `string` | Yes      | JIRA issue key                                           |
+    | `transition_id` | `string` | Yes      | Transition ID (use `jira_get_issue` to find valid ones)  |
+  </Accordion>
+  <Accordion title="jira_add_comment">
+    Adds a comment to an existing JIRA issue.
+
+    | Parameter   | Type     | Required | Description         |
+    | ----------- | -------- | -------- | ------------------- |
+    | `issue_key` | `string` | Yes      | JIRA issue key      |
+    | `body`      | `string` | Yes      | Comment text        |
+  </Accordion>
+</AccordionGroup>
+
+## Slack
+
+The Slack domain provides a tool for sending messages to channels or threads. It requires a bot token:
+
+```bash
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+```
+
+Your Slack app must have the `chat:write` scope.
+
+### Loading Slack tools
+
+```typescript
+const { tools } = await loader.load_domain('slack');
+```
+
+### Available tools
+
+<AccordionGroup>
+  <Accordion title="slack_send_message">
+    Sends a message to a Slack channel. Optionally replies in a thread. Returns the message timestamp (`ts`).
+
+    | Parameter   | Type     | Required | Description                                                                                              |
+    | ----------- | -------- | -------- | -------------------------------------------------------------------------------------------------------- |
+    | `channel`   | `string` | Yes      | Channel ID (e.g. `"C01234ABCDE"`) or channel name (e.g. `"#engineering"`)                               |
+    | `text`      | `string` | Yes      | Message text. Supports Slack markdown (`mrkdwn`).                                                       |
+    | `thread_ts` | `string` | No       | Thread timestamp to reply in. Omit this to post as a new top-level message.                              |
+  </Accordion>
+</AccordionGroup>
+
+## Bitbucket
+
+The Bitbucket domain mirrors the GitHub domain for teams using Bitbucket Cloud. All tools require:
+
+```bash
+BITBUCKET_USERNAME=your-username
+BITBUCKET_APP_PASSWORD=your-app-password
+```
+
+### Loading Bitbucket tools
+
+```typescript
+const { tools } = await loader.load_domain('bitbucket');
+```
+
+### Available tools
+
+| Tool name                  | Description                                              |
+| -------------------------- | -------------------------------------------------------- |
+| `bitbucket_list_prs`       | Lists pull requests for a repository                     |
+| `bitbucket_get_pr`         | Fetches details for a single pull request                |
+| `bitbucket_get_pr_diff`    | Returns the diff for a pull request                      |
+| `bitbucket_create_pr`      | Creates a new pull request                               |
+| `bitbucket_post_comment`   | Posts a comment on a pull request                        |
+| `bitbucket_merge_pr`       | Merges a pull request                                    |
+
+## Zendesk
+
+The Zendesk domain provides tools for ticket management. All tools require:
+
+```bash
+ZENDESK_SUBDOMAIN=your-subdomain
+ZENDESK_EMAIL=bot@your-org.com
+ZENDESK_API_TOKEN=your_api_token
+```
+
+### Loading Zendesk tools
+
+```typescript
+const { tools } = await loader.load_domain('zendesk');
+```
+
+### Available tools
+
+| Tool name               | Description                                              |
+| ----------------------- | -------------------------------------------------------- |
+| `zendesk_list_tickets`  | Lists tickets, optionally filtered by status or assignee |
+| `zendesk_get_ticket`    | Fetches full details for a single ticket by ID           |
+| `zendesk_create_ticket` | Creates a new support ticket                             |
+| `zendesk_update_ticket` | Updates ticket fields such as status, priority, or tags  |
+| `zendesk_add_comment`   | Adds a public or internal comment to a ticket            |
+
+## Datadog
+
+The Datadog domain provides tools for querying monitoring data. All tools require:
+
+```bash
+DATADOG_API_KEY=your_api_key
+DATADOG_APP_KEY=your_app_key
+```
+
+### Loading Datadog tools
+
+```typescript
+const { tools } = await loader.load_domain('datadog');
+```
+
+### Available tools
+
+| Tool name                 | Description                                              |
+| ------------------------- | -------------------------------------------------------- |
+| `datadog_get_alerts`      | Retrieves active monitor alerts                          |
+| `datadog_query_metrics`   | Runs a metrics query over a time range                   |
+
+## Shell
+
+The shell domain provides a general-purpose command execution tool. It runs any shell command and returns stdout, stderr, and exit code. This is useful for running `git`, `kubectl`, `docker`, and similar CLI tools from an agent.
+
+```typescript
+const { tools } = await loader.load_domain('shell');
+```
+
+| Tool name    | Description                                              |
+| ------------ | -------------------------------------------------------- |
+| `shell_exec` | Executes a shell command and returns the output          |
+
+<Warning>
+`shell_exec` runs commands with the same permissions as the Svantic process. Only use it in environments where you control what the agent can invoke. Do not expose it to untrusted user input.
+</Warning>
+
+## Complete example: GitHub + JIRA agent
+
+The following example loads both the GitHub and JIRA domains and registers them on an agent. The environment variables must be set before the agent starts.
+
+```typescript
+import { Agent, BuiltinToolLoader } from '@svantic/sdk';
+import express from 'express';
+
+const app = express();
+const agent = new Agent({
+  name: 'pr-review-agent',
+  description: 'Reviews pull requests and manages JIRA tickets.',
+  url: 'http://localhost:4000',
+});
+
+const loader = new BuiltinToolLoader();
+
+// Load GitHub and JIRA tools
+const { tools, loaded, errors } = await loader.load_domains(['github', 'jira']);
+
+if (errors.length > 0) {
+  console.warn('Some tools failed to load:', errors);
+}
+
+console.log('Loaded tools:', loaded);
+// ['github_list_prs', 'github_get_pr', ..., 'jira_get_issue', ...]
+
+// Register tools as capabilities on the agent
+for (const tool of tools) {
+  agent.define_capability({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    handler: async (args) => tool.handler(args),
+  });
+}
+
+agent.expose(app);
+app.listen(4000);
+```
+
+Required environment variables for this example:
+
+```bash
+GITHUB_TOKEN=ghp_your_token_here
+JIRA_BASE_URL=https://your-org.atlassian.net
+JIRA_EMAIL=bot@your-org.com
+JIRA_API_TOKEN=your_api_token
+```
